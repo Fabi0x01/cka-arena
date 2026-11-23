@@ -1,0 +1,92 @@
+{
+  "schema_version": "1.2",
+  "id": "seed-ca-etcd-snapshot-save",
+  "title": "Save an etcd Snapshot",
+  "domain": "Cluster Architecture, Installation & Configuration",
+  "subtopics": [
+    "etcd",
+    "backup",
+    "etcdctl"
+  ],
+  "difficulty": "exam_standard",
+  "weight": 5,
+  "estimated_minutes": 5,
+  "prompt": "The control plane runs a stacked etcd with certificates under `/etc/kubernetes/pki/etcd/`.\n\nPerform the following tasks:\n1. Save an etcd snapshot to `/opt/backup/etcd.db` on `controlplane` using the existing etcd certificates.\n2. Do not modify any existing etcd data.",
+  "copy_tokens": [
+    "/opt/backup/etcd.db",
+    "controlplane",
+    "/etc/kubernetes/pki/etcd/",
+    "etcdctl"
+  ],
+  "docs_links": [
+    {
+      "label": "Backing up etcd",
+      "url": "https://kubernetes.io/docs/tasks/administer-cluster/configure-upgrade-etcd/"
+    }
+  ],
+  "setup": {
+    "namespaces": [],
+    "manifests": []
+  },
+  "checks": [
+    {
+      "id": "chk-snapshot-file",
+      "description": "Snapshot file `/opt/backup/etcd.db` exists and is non-empty",
+      "type": "node_command_exit_zero",
+      "params": {
+        "node": "controlplane",
+        "command": "test -s /opt/backup/etcd.db && echo SNAPSHOT_OK",
+        "stdout_contains": "SNAPSHOT_OK"
+      },
+      "failure_hint": "Run etcdctl snapshot save with the certs under /etc/kubernetes/pki/etcd/."
+    },
+    {
+      "id": "chk-snapshot-content",
+      "description": "Snapshot file has content on `controlplane`",
+      "type": "host_file_contains",
+      "params": {
+        "location": "controlplane",
+        "path": "/opt/backup/etcd.db",
+        "regex_patterns": [
+          "(?s).+"
+        ]
+      },
+      "failure_hint": "The snapshot file is missing or empty."
+    }
+  ],
+  "solution": {
+    "manifests": [],
+    "commands": [],
+    "node_commands": [
+      {
+        "node": "controlplane",
+        "sudo": true,
+        "backup_paths": [],
+        "command": "mkdir -p /opt/backup && ETCDCTL_API=3 /usr/bin/etcdctl --endpoints=https://127.0.0.1:2379 --cacert=/etc/kubernetes/pki/etcd/ca.crt --cert=/etc/kubernetes/pki/etcd/server.crt --key=/etc/kubernetes/pki/etcd/server.key snapshot save /opt/backup/etcd.db"
+      }
+    ]
+  },
+  "cleanup": {
+    "namespaces": [],
+    "node_commands": [
+      {
+        "node": "controlplane",
+        "sudo": true,
+        "backup_paths": [],
+        "command": "rm -f /opt/backup/etcd.db"
+      }
+    ]
+  },
+  "reference_solution": "Take the snapshot with the etcd certificates.\n```bash\nsudo ETCDCTL_API=3 etcdctl --endpoints=https://127.0.0.1:2379 \\\n  --cacert=/etc/kubernetes/pki/etcd/ca.crt \\\n  --cert=/etc/kubernetes/pki/etcd/server.crt \\\n  --key=/etc/kubernetes/pki/etcd/server.key \\\n  snapshot save /opt/backup/etcd.db\n```",
+  "destructive": false,
+  "archetype_id": "ca-etcd-snapshot-save",
+  "context_command": "kubectl config use-context cka",
+  "ssh_target": "controlplane",
+  "hints": [
+    "SSH to controlplane and verify etcd client flags in /etc/kubernetes/manifests/etcd.yaml.",
+    "Pass --endpoints=https://127.0.0.1:2379 plus --cacert, --cert, and --key from /etc/kubernetes/pki/etcd/ to etcdctl snapshot save."
+  ],
+  "fast_solution_commands": [
+    "sudo ETCDCTL_API=3 etcdctl --endpoints=https://127.0.0.1:2379 --cacert=/etc/kubernetes/pki/etcd/ca.crt --cert=/etc/kubernetes/pki/etcd/server.crt --key=/etc/kubernetes/pki/etcd/server.key snapshot save /opt/backup/etcd.db"
+  ]
+}

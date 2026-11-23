@@ -1,0 +1,134 @@
+{
+  "schema_version": "1.2",
+  "id": "seed-sn-networkpolicy-dns",
+  "title": "Allow Selected Traffic Through Default Deny",
+  "domain": "Services & Networking",
+  "subtopics": [
+    "NetworkPolicy",
+    "egress",
+    "DNS",
+    "default-deny"
+  ],
+  "difficulty": "killer_hardcore",
+  "weight": 7,
+  "estimated_minutes": 6,
+  "prompt": "Namespace `cka-netpol` has a `default-deny` NetworkPolicy that blocks all ingress and egress. The Pod `client` must reach `api-svc` (backing Pods labeled `app=api` on port `80`) and must still resolve cluster DNS, while the Pod `intruder` must remain unable to reach the API.\n\nPerform the following tasks:\n1. Create a NetworkPolicy named `allow-client-api` that allows `client` to reach the `api` Pods on port `80`.\n2. Allow DNS egress from `client` to the `kube-system` namespace on UDP and TCP port `53`.\n3. Keep `intruder` blocked from reaching the API.",
+  "copy_tokens": [
+    "cka-netpol",
+    "default-deny",
+    "allow-client-api",
+    "client",
+    "api-svc",
+    "app=api",
+    "intruder",
+    "53"
+  ],
+  "docs_links": [
+    {
+      "label": "Network Policies",
+      "url": "https://kubernetes.io/docs/concepts/services-networking/network-policies/"
+    }
+  ],
+  "setup": {
+    "namespaces": [
+      "cka-netpol"
+    ],
+    "manifests": [
+      "apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: default-deny\n  namespace: cka-netpol\nspec:\n  podSelector: {}\n  policyTypes:\n  - Ingress\n  - Egress\n",
+      "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\n  namespace: cka-netpol\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: api\n  template:\n    metadata:\n      labels:\n        app: api\n    spec:\n      containers:\n      - name: api\n        image: nginx:1.27-alpine\n        ports:\n        - containerPort: 80\n",
+      "apiVersion: v1\nkind: Service\nmetadata:\n  name: api-svc\n  namespace: cka-netpol\nspec:\n  selector:\n    app: api\n  ports:\n  - port: 80\n    targetPort: 80\n",
+      "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: client\n  namespace: cka-netpol\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: client\n  template:\n    metadata:\n      labels:\n        app: client\n    spec:\n      containers:\n      - name: client\n        image: curlimages/curl:8.10.1\n        command: [\"sleep\", \"3600\"]\n",
+      "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: intruder\n  namespace: cka-netpol\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: intruder\n  template:\n    metadata:\n      labels:\n        app: intruder\n    spec:\n      containers:\n      - name: intruder\n        image: curlimages/curl:8.10.1\n        command: [\"sleep\", \"3600\"]\n"
+    ]
+  },
+  "checks": [
+    {
+      "id": "chk-client-http",
+      "description": "`client` can reach `api-svc` with HTTP 200",
+      "type": "pod_exec_exit_zero",
+      "params": {
+        "namespace": "cka-netpol",
+        "label_selector": "app=client",
+        "command": [
+          "curl",
+          "-sS",
+          "--max-time",
+          "5",
+          "-o",
+          "/dev/null",
+          "-w",
+          "%{http_code}",
+          "http://api-svc.cka-netpol.svc.cluster.local"
+        ],
+        "stdout_contains": "200"
+      },
+      "failure_hint": "Allow ingress to app=api from app=client on port 80 and egress from client to the API."
+    },
+    {
+      "id": "chk-client-dns",
+      "description": "`client` can resolve `api-svc` through cluster DNS",
+      "type": "pod_exec_exit_zero",
+      "params": {
+        "namespace": "cka-netpol",
+        "label_selector": "app=client",
+        "command": [
+          "sh",
+          "-c",
+          "nslookup api-svc.cka-netpol.svc.cluster.local | grep -q Address"
+        ]
+      },
+      "failure_hint": "Allow egress from client to kube-system on UDP/TCP 53."
+    },
+    {
+      "id": "chk-policy-exists",
+      "description": "NetworkPolicy `allow-client-api` exists",
+      "type": "kubectl_resource_exists",
+      "params": {
+        "kind": "networkpolicy",
+        "name": "allow-client-api",
+        "namespace": "cka-netpol"
+      },
+      "failure_hint": "Create the policy with exactly that name."
+    },
+    {
+      "id": "chk-intruder-denied",
+      "description": "`intruder` cannot reach the API",
+      "type": "pod_exec_must_fail",
+      "params": {
+        "namespace": "cka-netpol",
+        "label_selector": "app=intruder",
+        "command": [
+          "curl",
+          "-sS",
+          "--max-time",
+          "5",
+          "http://api-svc.cka-netpol.svc.cluster.local"
+        ]
+      },
+      "failure_hint": "Do not allow app=intruder \u2014 the default deny must keep it blocked."
+    }
+  ],
+  "solution": {
+    "manifests": [
+      "apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: allow-client-api\n  namespace: cka-netpol\nspec:\n  podSelector:\n    matchLabels:\n      app: api\n  policyTypes:\n  - Ingress\n  ingress:\n  - from:\n    - podSelector:\n        matchLabels:\n          app: client\n    ports:\n    - protocol: TCP\n      port: 80\n",
+      "apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: allow-client-dns\n  namespace: cka-netpol\nspec:\n  podSelector:\n    matchLabels:\n      app: client\n  policyTypes:\n  - Egress\n  egress:\n  - to:\n    - namespaceSelector:\n        matchLabels:\n          kubernetes.io/metadata.name: kube-system\n    ports:\n    - protocol: UDP\n      port: 53\n    - protocol: TCP\n      port: 53\n  - to:\n    - podSelector:\n        matchLabels:\n          app: api\n    ports:\n    - protocol: TCP\n      port: 80\n"
+    ],
+    "commands": []
+  },
+  "cleanup": {
+    "namespaces": [
+      "cka-netpol"
+    ]
+  },
+  "reference_solution": "Add the allow policies alongside the default deny.\n```yaml\n# allow-client-api: podSelector app=api, ingress from app=client on 80\n# allow-client-dns: podSelector app=client, egress to kube-system UDP/TCP 53 + to app=api:80\n```",
+  "destructive": false,
+  "archetype_id": "sn-networkpolicy-dns",
+  "context_command": "kubectl config use-context cka",
+  "hints": [
+    "Inspect existing NetworkPolicies in `cka-netpol` (`k -n cka-netpol describe netpol`) and check both Ingress and Egress isolation.",
+    "Allow TCP port 80 between the required client/backend pods AND allow UDP/TCP port 53 egress so CoreDNS resolution succeeds."
+  ],
+  "fast_solution_commands": [
+    "k -n cka-netpol get netpol,pods --show-labels"
+  ]
+}

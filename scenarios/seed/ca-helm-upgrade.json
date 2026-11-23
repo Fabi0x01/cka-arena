@@ -1,0 +1,113 @@
+{
+  "schema_version": "1.2",
+  "id": "seed-ca-helm-upgrade",
+  "title": "Upgrade a Helm Release",
+  "domain": "Cluster Architecture, Installation & Configuration",
+  "subtopics": [
+    "Helm",
+    "upgrade",
+    "replicas"
+  ],
+  "difficulty": "killer_hardcore",
+  "weight": 7,
+  "estimated_minutes": 6,
+  "prompt": "The Helm release `cka-web` runs in namespace `cka-helm` from the local chart `assets/helm-chart` (revision 1, image nginx:1.26-alpine, 1 replica).\n\nPerform the following tasks:\n1. Upgrade the release `cka-web` to the image `nginx:1.27-alpine`.\n2. Scale the release to `2` replicas.\n3. Keep the release name and chart path unchanged.",
+  "copy_tokens": [
+    "cka-web",
+    "cka-helm",
+    "nginx:1.27-alpine",
+    "2",
+    "assets/helm-chart"
+  ],
+  "docs_links": [
+    {
+      "label": "Helm",
+      "url": "https://helm.sh/docs/"
+    }
+  ],
+  "setup": {
+    "namespaces": [],
+    "manifests": [],
+    "commands": [
+      "helm upgrade --install cka-web assets/helm-chart -n cka-helm --create-namespace"
+    ]
+  },
+  "checks": [
+    {
+      "id": "chk-release-revision",
+      "description": "Release `cka-web` is deployed at revision >= 2",
+      "type": "helm_release_state",
+      "params": {
+        "namespace": "cka-helm",
+        "release_name": "cka-web",
+        "expected_status": "deployed",
+        "min_revision": 2
+      },
+      "failure_hint": "Run helm upgrade so the revision increments."
+    },
+    {
+      "id": "chk-pods-ready",
+      "description": "Two Pods of the release are Ready",
+      "type": "pod_status_ready",
+      "params": {
+        "namespace": "cka-helm",
+        "label_selector": "app=cka-web",
+        "min_ready": 2
+      },
+      "failure_hint": "Set replicaCount=2 in the upgrade."
+    },
+    {
+      "id": "chk-image",
+      "description": "Deployment image is `nginx:1.27-alpine`",
+      "type": "kubectl_jsonpath",
+      "params": {
+        "kind": "deployment",
+        "name": "cka-web",
+        "namespace": "cka-helm",
+        "jsonpath": "{.spec.template.spec.containers[0].image}",
+        "operator": "equals",
+        "expected": "nginx:1.27-alpine"
+      },
+      "failure_hint": "Pass --set image.tag=1.27-alpine to helm upgrade."
+    },
+    {
+      "id": "chk-replicas",
+      "description": "Deployment requests 2 replicas",
+      "type": "kubectl_jsonpath",
+      "params": {
+        "kind": "deployment",
+        "name": "cka-web",
+        "namespace": "cka-helm",
+        "jsonpath": "{.spec.replicas}",
+        "operator": "gte",
+        "expected": 2
+      },
+      "failure_hint": "Pass --set replicaCount=2 to helm upgrade."
+    }
+  ],
+  "solution": {
+    "manifests": [],
+    "commands": [
+      "helm upgrade cka-web assets/helm-chart -n cka-helm --set image.tag=1.27-alpine --set replicaCount=2"
+    ]
+  },
+  "cleanup": {
+    "namespaces": [
+      "cka-helm"
+    ],
+    "commands": [
+      "helm uninstall cka-web -n cka-helm"
+    ]
+  },
+  "reference_solution": "Upgrade with the new image tag and replica count.\n```bash\nhelm upgrade cka-web assets/helm-chart -n cka-helm \\\n  --set image.tag=1.27-alpine --set replicaCount=2\n```",
+  "destructive": false,
+  "archetype_id": "ca-helm-upgrade",
+  "context_command": "kubectl config use-context cka",
+  "hints": [
+    "List existing releases with `helm list -n cka-helm` and inspect chart values under `assets/helm-chart`.",
+    "Use `helm upgrade cka-web assets/helm-chart -n cka-helm` overriding `image.tag` and `replicaCount`."
+  ],
+  "fast_solution_commands": [
+    "helm upgrade cka-web assets/helm-chart -n cka-helm --set image.tag=1.27-alpine --set replicaCount=2"
+  ]
+}

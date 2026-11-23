@@ -1,0 +1,104 @@
+{
+  "schema_version": "1.2",
+  "id": "seed-ca-rolebinding-subject",
+  "title": "Repair a RoleBinding Subject",
+  "domain": "Cluster Architecture, Installation & Configuration",
+  "subtopics": [
+    "RBAC",
+    "RoleBinding",
+    "ServiceAccount"
+  ],
+  "difficulty": "exam_standard",
+  "weight": 5,
+  "estimated_minutes": 4,
+  "prompt": "In namespace `cka-rbac2` the Role `pod-reader` grants `get` and `list` on Pods, but the RoleBinding points at the wrong subject: ServiceAccount `deployer2` has no access while `wrong-sa` does.\n\nPerform the following tasks:\n1. Make the ServiceAccount `deployer2` able to `get` and `list` Pods in `cka-rbac2` only.\n2. Ensure the ServiceAccount `wrong-sa` has no access to those Pods.",
+  "copy_tokens": [
+    "cka-rbac2",
+    "pod-reader",
+    "deployer2",
+    "wrong-sa",
+    "RoleBinding"
+  ],
+  "docs_links": [
+    {
+      "label": "RBAC",
+      "url": "https://kubernetes.io/docs/reference/access-authn-authz/rbac/"
+    }
+  ],
+  "setup": {
+    "namespaces": [
+      "cka-rbac2"
+    ],
+    "manifests": [
+      "apiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: deployer2\n  namespace: cka-rbac2\n",
+      "apiVersion: rbac.authorization.k8s.io/v1\nkind: Role\nmetadata:\n  name: pod-reader\n  namespace: cka-rbac2\nrules:\n- apiGroups: [\"\"]\n  resources: [\"pods\"]\n  verbs: [\"get\", \"list\"]\n",
+      "apiVersion: rbac.authorization.k8s.io/v1\nkind: RoleBinding\nmetadata:\n  name: pod-reader-binding\n  namespace: cka-rbac2\nsubjects:\n- kind: ServiceAccount\n  name: wrong-sa\n  namespace: cka-rbac2\nroleRef:\n  kind: Role\n  name: pod-reader\n  apiGroup: rbac.authorization.k8s.io\n"
+    ]
+  },
+  "checks": [
+    {
+      "id": "chk-can-get",
+      "description": "`deployer2` can `get` Pods in `cka-rbac2`",
+      "type": "kubectl_auth_can_i",
+      "params": {
+        "verb": "get",
+        "resource": "pods",
+        "service_account": "deployer2",
+        "namespace": "cka-rbac2",
+        "target_namespace": "cka-rbac2",
+        "expected_allowed": true
+      },
+      "failure_hint": "Patch the RoleBinding subject to deployer2."
+    },
+    {
+      "id": "chk-can-list",
+      "description": "`deployer2` can `list` Pods in `cka-rbac2`",
+      "type": "kubectl_auth_can_i",
+      "params": {
+        "verb": "list",
+        "resource": "pods",
+        "service_account": "deployer2",
+        "namespace": "cka-rbac2",
+        "target_namespace": "cka-rbac2",
+        "expected_allowed": true
+      },
+      "failure_hint": "The Role grants list \u2014 fix the binding subject."
+    },
+    {
+      "id": "chk-wrong-sa-denied",
+      "description": "`wrong-sa` cannot `get` Pods in `cka-rbac2`",
+      "type": "kubectl_auth_can_i",
+      "params": {
+        "verb": "get",
+        "resource": "pods",
+        "service_account": "wrong-sa",
+        "namespace": "cka-rbac2",
+        "target_namespace": "cka-rbac2",
+        "expected_allowed": false
+      },
+      "failure_hint": "The binding currently points at wrong-sa \u2014 repoint it at deployer2."
+    }
+  ],
+  "solution": {
+    "manifests": [],
+    "commands": [
+      "kubectl -n cka-rbac2 patch rolebinding pod-reader-binding --type=json -p='[{\"op\":\"replace\",\"path\":\"/subjects/0/name\",\"value\":\"deployer2\"}]'"
+    ]
+  },
+  "cleanup": {
+    "namespaces": [
+      "cka-rbac2"
+    ]
+  },
+  "reference_solution": "Repoint the binding subject.\n```bash\nkubectl -n cka-rbac2 patch rolebinding pod-reader-binding --type=json -p='[{\"op\":\"replace\",\"path\":\"/subjects/0/name\",\"value\":\"deployer2\"}]'\n```",
+  "destructive": false,
+  "archetype_id": "ca-rolebinding-subject",
+  "context_command": "kubectl config use-context cka",
+  "hints": [
+    "Compare the target ServiceAccount with `k -n cka-rbac2 get rolebinding pod-reader-binding -o yaml`.",
+    "Ensure the RoleBinding subject kind, name, and namespace point to ServiceAccount `deployer2` in `cka-rbac2`."
+  ],
+  "fast_solution_commands": [
+    "k -n cka-rbac2 patch rolebinding pod-reader-binding --type=json -p='[{\"op\":\"replace\",\"path\":\"/subjects/0/name\",\"value\":\"deployer2\"}]'"
+  ]
+}

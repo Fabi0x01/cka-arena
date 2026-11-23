@@ -1,0 +1,120 @@
+{
+  "schema_version": "1.2",
+  "id": "seed-st-pod-wrong-claim",
+  "title": "Fix a Pod Volume Claim",
+  "domain": "Storage",
+  "subtopics": [
+    "PersistentVolumeClaim",
+    "volumes"
+  ],
+  "difficulty": "killer_hardcore",
+  "weight": 7,
+  "estimated_minutes": 5,
+  "prompt": "In namespace `cka-st-claim`, Pod `web` mounts claim `pvc-wrong`, which does not exist, so the Pod stays `Pending`. The correct claim `pvc-data` is already `Bound`.\n\nPerform the following tasks:\n1. Fix Pod `web` so it mounts PersistentVolumeClaim `pvc-data`.\n2. Keep the Pod image `nginx:1.27-alpine`.\n3. The Pod must become `Running` and `Ready`.",
+  "copy_tokens": [
+    "cka-st-claim",
+    "web",
+    "pvc-wrong",
+    "pvc-data",
+    "nginx:1.27-alpine"
+  ],
+  "docs_links": [
+    {
+      "label": "Configure a Pod to Use a PVC",
+      "url": "https://kubernetes.io/docs/tasks/configure-pod-container/configure-persistent-volume-storage/"
+    }
+  ],
+  "setup": {
+    "namespaces": [
+      "cka-st-claim"
+    ],
+    "manifests": [
+      "apiVersion: v1\nkind: PersistentVolume\nmetadata:\n  name: pv-data\nspec:\n  capacity:\n    storage: 1Gi\n  accessModes:\n  - ReadWriteOnce\n  storageClassName: manual\n  hostPath:\n    path: /tmp/cka-st-claim-data\n    type: DirectoryOrCreate\n",
+      "apiVersion: v1\nkind: PersistentVolumeClaim\nmetadata:\n  name: pvc-data\n  namespace: cka-st-claim\nspec:\n  accessModes:\n  - ReadWriteOnce\n  storageClassName: manual\n  resources:\n    requests:\n      storage: 1Gi\n",
+      "apiVersion: v1\nkind: Pod\nmetadata:\n  name: web\n  namespace: cka-st-claim\n  labels:\n    app: web\nspec:\n  containers:\n  - name: web\n    image: nginx:1.27-alpine\n    volumeMounts:\n    - name: data\n      mountPath: /usr/share/nginx/html\n  volumes:\n  - name: data\n    persistentVolumeClaim:\n      claimName: pvc-wrong\n"
+    ]
+  },
+  "checks": [
+    {
+      "id": "chk-pod-ready",
+      "description": "Pod `web` is Running and Ready",
+      "type": "pod_status_ready",
+      "params": {
+        "namespace": "cka-st-claim",
+        "label_selector": "app=web",
+        "min_ready": 1
+      },
+      "failure_hint": "The Pod references a missing claim \u2014 point it at pvc-data."
+    },
+    {
+      "id": "chk-claim",
+      "description": "Pod mounts claim `pvc-data`",
+      "type": "kubectl_jsonpath",
+      "params": {
+        "kind": "pod",
+        "name": "web",
+        "namespace": "cka-st-claim",
+        "jsonpath": "{.spec.volumes[0].persistentVolumeClaim.claimName}",
+        "operator": "equals",
+        "expected": "pvc-data"
+      },
+      "failure_hint": "Recreate the Pod with claimName pvc-data."
+    },
+    {
+      "id": "chk-pvc",
+      "description": "PVC `pvc-data` is `Bound`",
+      "type": "kubectl_jsonpath",
+      "params": {
+        "kind": "pvc",
+        "name": "pvc-data",
+        "namespace": "cka-st-claim",
+        "jsonpath": "{.status.phase}",
+        "operator": "equals",
+        "expected": "Bound"
+      },
+      "failure_hint": "The claim is provided by the scenario; keep it."
+    },
+    {
+      "id": "chk-image",
+      "description": "Pod image remains `nginx:1.27-alpine`",
+      "type": "kubectl_jsonpath",
+      "params": {
+        "kind": "pod",
+        "name": "web",
+        "namespace": "cka-st-claim",
+        "jsonpath": "{.spec.containers[0].image}",
+        "operator": "equals",
+        "expected": "nginx:1.27-alpine"
+      },
+      "failure_hint": "Do not change the Pod image."
+    }
+  ],
+  "solution": {
+    "manifests": [
+      "apiVersion: v1\nkind: Pod\nmetadata:\n  name: web\n  namespace: cka-st-claim\n  labels:\n    app: web\nspec:\n  containers:\n  - name: web\n    image: nginx:1.27-alpine\n    volumeMounts:\n    - name: data\n      mountPath: /usr/share/nginx/html\n  volumes:\n  - name: data\n    persistentVolumeClaim:\n      claimName: pvc-data\n"
+    ],
+    "commands": [
+      "kubectl -n cka-st-claim delete pod web --ignore-not-found"
+    ]
+  },
+  "cleanup": {
+    "namespaces": [
+      "cka-st-claim"
+    ],
+    "commands": [
+      "kubectl delete pv pv-data --ignore-not-found"
+    ]
+  },
+  "reference_solution": "Recreate the Pod with the correct claim.\n```bash\nkubectl -n cka-st-claim delete pod web --ignore-not-found\nkubectl -n cka-st-claim apply -f web-pod.yaml\n```",
+  "destructive": false,
+  "archetype_id": "st-pod-wrong-claim",
+  "context_command": "kubectl config use-context cka",
+  "hints": [
+    "Inspect `k -n cka-st-claim describe pod web` and list available PVCs with `k -n cka-st-claim get pvc`.",
+    "Pod `spec.volumes` is immutable; capture YAML with `-o yaml > pod.yaml`, update the claimName, then delete and recreate the Pod."
+  ],
+  "fast_solution_commands": [
+    "k -n cka-st-claim get pod web -o yaml > web.yaml",
+    "k -n cka-st-claim replace --force -f web.yaml"
+  ]
+}

@@ -1,0 +1,98 @@
+{
+  "schema_version": "1.2",
+  "id": "seed-ts-readiness-probe",
+  "title": "Fix a Failing Readiness Probe",
+  "domain": "Troubleshooting",
+  "subtopics": [
+    "readinessProbe",
+    "Deployment"
+  ],
+  "difficulty": "exam_standard",
+  "weight": 4,
+  "estimated_minutes": 4,
+  "prompt": "The Pod of Deployment `web` in namespace `cka-ts-ready` stays `Running` but never becomes `Ready`: its readiness probe requests a path that the server answers with 404.\n\nPerform the following tasks:\n1. Fix the `readinessProbe` of Deployment `web` so its Pod becomes `Ready`.\n2. Keep the container image `nginx:1.27-alpine` unchanged.",
+  "copy_tokens": [
+    "web",
+    "cka-ts-ready",
+    "readinessProbe",
+    "Ready",
+    "nginx:1.27-alpine"
+  ],
+  "docs_links": [
+    {
+      "label": "Debug Pods",
+      "url": "https://kubernetes.io/docs/tasks/debug/debug-application/debug-pods/"
+    }
+  ],
+  "setup": {
+    "namespaces": [
+      "cka-ts-ready"
+    ],
+    "manifests": [
+      "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n  namespace: cka-ts-ready\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: web\n  template:\n    metadata:\n      labels:\n        app: web\n    spec:\n      containers:\n      - name: web\n        image: nginx:1.27-alpine\n        readinessProbe:\n          httpGet:\n            path: /healthz\n            port: 80\n"
+    ]
+  },
+  "checks": [
+    {
+      "id": "chk-pod-ready",
+      "description": "Pod of Deployment `web` is Running and Ready",
+      "type": "pod_status_ready",
+      "params": {
+        "namespace": "cka-ts-ready",
+        "label_selector": "app=web",
+        "min_ready": 1
+      },
+      "failure_hint": "The probe path returns 404 \u2014 point it at a path nginx serves (e.g. /)."
+    },
+    {
+      "id": "chk-image-kept",
+      "description": "Container image remains `nginx:1.27-alpine`",
+      "type": "kubectl_jsonpath",
+      "params": {
+        "kind": "deployment",
+        "name": "web",
+        "namespace": "cka-ts-ready",
+        "jsonpath": "{.spec.template.spec.containers[0].image}",
+        "operator": "equals",
+        "expected": "nginx:1.27-alpine"
+      },
+      "failure_hint": "Do not change the image; fix only the readiness probe."
+    },
+    {
+      "id": "chk-available",
+      "description": "Deployment reports at least 1 available replica",
+      "type": "kubectl_jsonpath",
+      "params": {
+        "kind": "deployment",
+        "name": "web",
+        "namespace": "cka-ts-ready",
+        "jsonpath": "{.status.availableReplicas}",
+        "operator": "gte",
+        "expected": 1
+      },
+      "failure_hint": "No replica is available until the readiness probe succeeds."
+    }
+  ],
+  "solution": {
+    "manifests": [],
+    "commands": [
+      "kubectl -n cka-ts-ready patch deployment web --type=json -p='[{\"op\":\"replace\",\"path\":\"/spec/template/spec/containers/0/readinessProbe/httpGet/path\",\"value\":\"/\"}]'"
+    ]
+  },
+  "cleanup": {
+    "namespaces": [
+      "cka-ts-ready"
+    ]
+  },
+  "reference_solution": "Point the readiness probe at a served path.\n```bash\nkubectl -n cka-ts-ready patch deployment web --type=json -p='[{\"op\":\"replace\",\"path\":\"/spec/template/spec/containers/0/readinessProbe/httpGet/path\",\"value\":\"/\"}]'\n```",
+  "destructive": false,
+  "archetype_id": "ts-readiness-probe",
+  "context_command": "kubectl config use-context cka",
+  "hints": [
+    "Run `k -n cka-ts-ready describe pod` to observe failing readiness probe HTTP responses and endpoints status.",
+    "Inspect `readinessProbe.httpGet.path` in Deployment `web` and point it to a path nginx serves (`/`)."
+  ],
+  "fast_solution_commands": [
+    "k -n cka-ts-ready describe pod -l app=web"
+  ]
+}

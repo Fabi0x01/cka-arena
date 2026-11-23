@@ -1,0 +1,91 @@
+{
+  "schema_version": "1.2",
+  "id": "seed-wl-taint-toleration",
+  "title": "Schedule a Pod on a Tainted Node",
+  "domain": "Workloads & Scheduling",
+  "subtopics": [
+    "taints",
+    "tolerations",
+    "scheduling"
+  ],
+  "difficulty": "exam_standard",
+  "weight": 4,
+  "estimated_minutes": 4,
+  "prompt": "Node `node02` carries the taint `cka-arena/practice=critical:NoSchedule`. Deployment `web` in namespace `cka-wl-taint` is pinned to `node02`, so its Pod stays `Pending`.\n\nPerform the following tasks:\n1. Make the Pod of Deployment `web` schedulable on `node02`.\n2. Keep the Pod pinned to `node02` via its existing nodeSelector.",
+  "copy_tokens": [
+    "node02",
+    "cka-arena/practice=critical:NoSchedule",
+    "web",
+    "cka-wl-taint",
+    "nodeSelector"
+  ],
+  "docs_links": [
+    {
+      "label": "Assigning Pods to Nodes",
+      "url": "https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/"
+    }
+  ],
+  "setup": {
+    "namespaces": [
+      "cka-wl-taint"
+    ],
+    "manifests": [
+      "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n  namespace: cka-wl-taint\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: web\n  template:\n    metadata:\n      labels:\n        app: web\n    spec:\n      nodeSelector:\n        kubernetes.io/hostname: node02\n      containers:\n      - name: web\n        image: nginx:1.27-alpine\n"
+    ],
+    "commands": [
+      "kubectl taint nodes node02 cka-arena/practice=critical:NoSchedule --overwrite"
+    ]
+  },
+  "checks": [
+    {
+      "id": "chk-pod-ready",
+      "description": "Pod of Deployment `web` is Running and Ready",
+      "type": "pod_status_ready",
+      "params": {
+        "namespace": "cka-wl-taint",
+        "label_selector": "app=web",
+        "min_ready": 1
+      },
+      "failure_hint": "Add a toleration for key cka-arena/practice, value critical, effect NoSchedule."
+    },
+    {
+      "id": "chk-node-selector",
+      "description": "Deployment stays pinned to `node02`",
+      "type": "kubectl_jsonpath",
+      "params": {
+        "kind": "deployment",
+        "name": "web",
+        "namespace": "cka-wl-taint",
+        "jsonpath": "{.spec.template.spec.nodeSelector}",
+        "operator": "contains",
+        "expected": "node02"
+      },
+      "failure_hint": "Do not remove the nodeSelector; add a toleration instead."
+    }
+  ],
+  "solution": {
+    "manifests": [],
+    "commands": [
+      "kubectl -n cka-wl-taint patch deployment web --type=merge -p='{\"spec\":{\"template\":{\"spec\":{\"tolerations\":[{\"key\":\"cka-arena/practice\",\"operator\":\"Equal\",\"value\":\"critical\",\"effect\":\"NoSchedule\"}]}}}}'"
+    ]
+  },
+  "cleanup": {
+    "namespaces": [
+      "cka-wl-taint"
+    ],
+    "commands": [
+      "kubectl taint nodes node02 cka-arena/practice=critical:NoSchedule-"
+    ]
+  },
+  "reference_solution": "Add the matching toleration.\n```bash\nkubectl -n cka-wl-taint patch deployment web --type=merge -p='{\"spec\":{\"template\":{\"spec\":{\"tolerations\":[{\"key\":\"cka-arena/practice\",\"operator\":\"Equal\",\"value\":\"critical\",\"effect\":\"NoSchedule\"}]}}}}'\n```",
+  "destructive": false,
+  "archetype_id": "wl-taint-toleration",
+  "context_command": "kubectl config use-context cka",
+  "hints": [
+    "Inspect node taints (`k describe nodes | grep -i taint`) and pending pod events in `cka-wl-taint`.",
+    "Add the matching `tolerations` entry (`key`, `operator`, `value`, `effect`) to Deployment `web` pod template."
+  ],
+  "fast_solution_commands": [
+    "k get nodes -o custom-columns=NAME:.metadata.name,TAINTS:.spec.taints"
+  ]
+}

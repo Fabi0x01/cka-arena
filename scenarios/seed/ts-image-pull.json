@@ -1,0 +1,97 @@
+{
+  "schema_version": "1.2",
+  "id": "seed-ts-image-pull",
+  "title": "Repair an ImagePullBackOff",
+  "domain": "Troubleshooting",
+  "subtopics": [
+    "ImagePullBackOff",
+    "Deployment"
+  ],
+  "difficulty": "exam_standard",
+  "weight": 4,
+  "estimated_minutes": 4,
+  "prompt": "The Pod of Deployment `web` in namespace `cka-ts-image` is stuck in `ImagePullBackOff` and cannot start.\n\nPerform the following tasks:\n1. Investigate why the Pod fails to start and repair Deployment `web`.\n2. Ensure Deployment `web` uses the image `nginx:1.27-alpine`.",
+  "copy_tokens": [
+    "web",
+    "cka-ts-image",
+    "ImagePullBackOff",
+    "nginx:1.27-alpine"
+  ],
+  "docs_links": [
+    {
+      "label": "Debug Pods",
+      "url": "https://kubernetes.io/docs/tasks/debug/debug-application/debug-pods/"
+    }
+  ],
+  "setup": {
+    "namespaces": [
+      "cka-ts-image"
+    ],
+    "manifests": [
+      "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n  namespace: cka-ts-image\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: web\n  template:\n    metadata:\n      labels:\n        app: web\n    spec:\n      containers:\n      - name: web\n        image: nginx:1.27-missing-tag\n"
+    ]
+  },
+  "checks": [
+    {
+      "id": "chk-pod-ready",
+      "description": "Pod of Deployment `web` is Running and Ready",
+      "type": "pod_status_ready",
+      "params": {
+        "namespace": "cka-ts-image",
+        "label_selector": "app=web",
+        "min_ready": 1
+      },
+      "failure_hint": "The image tag cannot be pulled \u2014 set the image to nginx:1.27-alpine."
+    },
+    {
+      "id": "chk-image",
+      "description": "Container image is `nginx:1.27-alpine`",
+      "type": "kubectl_jsonpath",
+      "params": {
+        "kind": "deployment",
+        "name": "web",
+        "namespace": "cka-ts-image",
+        "jsonpath": "{.spec.template.spec.containers[0].image}",
+        "operator": "equals",
+        "expected": "nginx:1.27-alpine"
+      },
+      "failure_hint": "Use kubectl set image deployment/web web=nginx:1.27-alpine -n cka-ts-image."
+    },
+    {
+      "id": "chk-available",
+      "description": "Deployment reports at least 1 available replica",
+      "type": "kubectl_jsonpath",
+      "params": {
+        "kind": "deployment",
+        "name": "web",
+        "namespace": "cka-ts-image",
+        "jsonpath": "{.status.availableReplicas}",
+        "operator": "gte",
+        "expected": 1
+      },
+      "failure_hint": "No replica is available while the image cannot be pulled."
+    }
+  ],
+  "solution": {
+    "manifests": [],
+    "commands": [
+      "kubectl -n cka-ts-image set image deployment/web web=nginx:1.27-alpine"
+    ]
+  },
+  "cleanup": {
+    "namespaces": [
+      "cka-ts-image"
+    ]
+  },
+  "reference_solution": "Set a pullable image tag.\n```bash\nkubectl -n cka-ts-image set image deployment/web web=nginx:1.27-alpine\n```",
+  "destructive": false,
+  "archetype_id": "ts-image-pull",
+  "context_command": "kubectl config use-context cka",
+  "hints": [
+    "Describe the failing Pod in `cka-ts-image` (`k -n cka-ts-image describe pod`) and check the Events table.",
+    "Compare the configured image reference on container `web` against valid `nginx` tags (`nginx:1.27-alpine`)."
+  ],
+  "fast_solution_commands": [
+    "k -n cka-ts-image set image deployment/web web=nginx:1.27-alpine"
+  ]
+}

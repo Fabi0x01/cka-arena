@@ -1,0 +1,20 @@
+CKA Arena
+Copyright (c) 2026 Fabio
+
+Third-party notices
+===================
+
+Cluster provisioning scripts in scripts/cluster/ are adapted from the
+"certified-kubernetes-administrator-course" project by Kim Wuestkamp / killer.sh
+community materials (kubeadm-clusters/apple-silicon), used under the terms of
+its repository license. The scripts were generalised for macOS/Linux and
+extended with WSL2 (kind) support.
+
+Vendored JavaScript
+-------------------
+- xterm.js and the fit addon (static/vendor/xterm) — MIT License, © The xterm.js authors.
+
+Kubernetes and related components (kubeadm, kind, weave-net, Calico,
+metrics-server, Gateway API, Envoy Gateway, local-path-provisioner) are
+installed at setup time and remain under their respective upstream licenses.
+They are not distributed with this repository.

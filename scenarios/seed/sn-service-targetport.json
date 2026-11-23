@@ -1,0 +1,111 @@
+{
+  "schema_version": "1.2",
+  "id": "seed-sn-service-targetport",
+  "title": "Fix a Service targetPort",
+  "domain": "Services & Networking",
+  "subtopics": [
+    "Service",
+    "targetPort",
+    "Endpoints"
+  ],
+  "difficulty": "exam_standard",
+  "weight": 4,
+  "estimated_minutes": 4,
+  "prompt": "Service `web-svc` in namespace `cka-sn-port` forwards port `80` to container port `8080`, but the Pods listen on `80`, so requests fail.\n\nPerform the following tasks:\n1. Fix Service `web-svc` so HTTP on port `80` reaches the Pods.\n2. Keep the Service type `ClusterIP`.",
+  "copy_tokens": [
+    "web-svc",
+    "cka-sn-port",
+    "80",
+    "8080",
+    "ClusterIP"
+  ],
+  "docs_links": [
+    {
+      "label": "Services",
+      "url": "https://kubernetes.io/docs/concepts/services-networking/service/"
+    }
+  ],
+  "setup": {
+    "namespaces": [
+      "cka-sn-port"
+    ],
+    "manifests": [
+      "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n  namespace: cka-sn-port\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: web\n  template:\n    metadata:\n      labels:\n        app: web\n    spec:\n      containers:\n      - name: web\n        image: nginx:1.27-alpine\n        ports:\n        - containerPort: 80\n",
+      "apiVersion: v1\nkind: Service\nmetadata:\n  name: web-svc\n  namespace: cka-sn-port\nspec:\n  type: ClusterIP\n  selector:\n    app: web\n  ports:\n  - port: 80\n    targetPort: 8080\n"
+    ]
+  },
+  "checks": [
+    {
+      "id": "chk-targetport",
+      "description": "Service targetPort is `80`",
+      "type": "kubectl_jsonpath",
+      "params": {
+        "kind": "service",
+        "name": "web-svc",
+        "namespace": "cka-sn-port",
+        "jsonpath": "{.spec.ports[0].targetPort}",
+        "operator": "equals",
+        "expected": "80"
+      },
+      "failure_hint": "Patch the Service port targetPort to 80."
+    },
+    {
+      "id": "chk-http",
+      "description": "HTTP through `web-svc` returns 200",
+      "type": "pod_exec_exit_zero",
+      "params": {
+        "namespace": "cka-sn-port",
+        "ephemeral_probe": true,
+        "command": [
+          "curl",
+          "-sS",
+          "--max-time",
+          "5",
+          "-o",
+          "/dev/null",
+          "-w",
+          "%{http_code}",
+          "http://web-svc.cka-sn-port.svc.cluster.local"
+        ],
+        "stdout_contains": "200"
+      },
+      "failure_hint": "The Service forwards to the wrong container port."
+    },
+    {
+      "id": "chk-type",
+      "description": "Service type remains `ClusterIP`",
+      "type": "kubectl_jsonpath",
+      "params": {
+        "kind": "service",
+        "name": "web-svc",
+        "namespace": "cka-sn-port",
+        "jsonpath": "{.spec.type}",
+        "operator": "equals",
+        "expected": "ClusterIP"
+      },
+      "failure_hint": "Do not change the Service type."
+    }
+  ],
+  "solution": {
+    "manifests": [],
+    "commands": [
+      "kubectl -n cka-sn-port patch service web-svc --type=merge -p='{\"spec\":{\"ports\":[{\"port\":80,\"targetPort\":80,\"protocol\":\"TCP\"}]}}'"
+    ]
+  },
+  "cleanup": {
+    "namespaces": [
+      "cka-sn-port"
+    ]
+  },
+  "reference_solution": "Fix the targetPort.\n```bash\nkubectl -n cka-sn-port patch service web-svc --type=merge -p='{\"spec\":{\"ports\":[{\"port\":80,\"targetPort\":80,\"protocol\":\"TCP\"}]}}'\n```",
+  "destructive": false,
+  "archetype_id": "sn-service-targetport",
+  "context_command": "kubectl config use-context cka",
+  "hints": [
+    "Inspect `k -n cka-sn-port describe svc web-svc` and check what port the container actually listens on in the Pod spec.",
+    "Update `spec.ports[0].targetPort` on `web-svc` to match the container listening port."
+  ],
+  "fast_solution_commands": [
+    "k -n cka-sn-port get deploy web -o jsonpath='{.spec.template.spec.containers[0].ports}'"
+  ]
+}

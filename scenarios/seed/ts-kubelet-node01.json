@@ -1,0 +1,96 @@
+{
+  "schema_version": "1.2",
+  "id": "seed-ts-kubelet-node01",
+  "title": "Restore a NotReady Node",
+  "domain": "Troubleshooting",
+  "subtopics": [
+    "kubelet",
+    "NotReady",
+    "systemd"
+  ],
+  "difficulty": "exam_standard",
+  "weight": 5,
+  "estimated_minutes": 4,
+  "prompt": "The node `node01` is in the `NotReady` state because its `kubelet` service is not running.\n\nPerform the following tasks:\n1. Restore the `kubelet` service on `node01` until the node reports `Ready`.\n2. Do not restart or reboot any other node.",
+  "copy_tokens": [
+    "node01",
+    "NotReady",
+    "kubelet",
+    "Ready"
+  ],
+  "docs_links": [
+    {
+      "label": "Troubleshoot Nodes",
+      "url": "https://kubernetes.io/docs/tasks/debug/debug-cluster/"
+    }
+  ],
+  "setup": {
+    "namespaces": [],
+    "manifests": [],
+    "node_commands": [
+      {
+        "node": "node01",
+        "command": "systemctl stop kubelet",
+        "backup_paths": [],
+        "sudo": true
+      }
+    ]
+  },
+  "checks": [
+    {
+      "id": "chk-node-ready",
+      "description": "Node `node01` reports `Ready=True`",
+      "type": "node_status_ready",
+      "params": {
+        "node_name": "node01"
+      },
+      "failure_hint": "Check `systemctl status kubelet` on node01 and start the service."
+    },
+    {
+      "id": "chk-kubelet-active",
+      "description": "kubelet service is active on `node01`",
+      "type": "node_command_exit_zero",
+      "params": {
+        "node": "node01",
+        "command": "systemctl is-active kubelet",
+        "stdout_contains": "active"
+      },
+      "failure_hint": "The kubelet unit is inactive \u2014 start it with systemctl."
+    }
+  ],
+  "solution": {
+    "manifests": [],
+    "commands": [],
+    "node_commands": [
+      {
+        "node": "node01",
+        "command": "systemctl start kubelet",
+        "backup_paths": [],
+        "sudo": true
+      }
+    ]
+  },
+  "cleanup": {
+    "namespaces": [],
+    "node_commands": [
+      {
+        "node": "node01",
+        "command": "systemctl start kubelet",
+        "backup_paths": [],
+        "sudo": true
+      }
+    ]
+  },
+  "reference_solution": "Start the kubelet service on node01.\n```bash\nssh cka-node01 'sudo systemctl start kubelet'\n```",
+  "destructive": false,
+  "archetype_id": "ts-kubelet-down",
+  "context_command": "kubectl config use-context cka",
+  "ssh_target": "node01",
+  "hints": [
+    "Check `k get nodes` and SSH into `node01` to inspect node services with `sudo systemctl status kubelet`.",
+    "Restart the kubelet systemd unit on `node01` (`sudo systemctl start kubelet`) and verify node Ready status."
+  ],
+  "fast_solution_commands": [
+    "ssh cka-node01 'sudo systemctl start kubelet && sudo systemctl is-active kubelet'"
+  ]
+}

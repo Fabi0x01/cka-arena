@@ -1,0 +1,85 @@
+{
+  "schema_version": "1.2",
+  "id": "seed-wl-resources-too-high",
+  "title": "Fix an Unschedulable CPU Request",
+  "domain": "Workloads & Scheduling",
+  "subtopics": [
+    "requests",
+    "scheduling",
+    "resources"
+  ],
+  "difficulty": "exam_standard",
+  "weight": 4,
+  "estimated_minutes": 4,
+  "prompt": "The Pod of Deployment `web` in namespace `cka-wl-resources` stays `Pending` with `Insufficient cpu`: it requests `4` CPUs, more than any node can allocate.\n\nPerform the following tasks:\n1. Reduce the CPU request of Deployment `web` to `100m` so the Pod can be scheduled.\n2. Keep the image `nginx:1.27-alpine`.",
+  "copy_tokens": [
+    "web",
+    "cka-wl-resources",
+    "Insufficient cpu",
+    "100m",
+    "nginx:1.27-alpine"
+  ],
+  "docs_links": [
+    {
+      "label": "Assigning Pods to Nodes",
+      "url": "https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/"
+    }
+  ],
+  "setup": {
+    "namespaces": [
+      "cka-wl-resources"
+    ],
+    "manifests": [
+      "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n  namespace: cka-wl-resources\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: web\n  template:\n    metadata:\n      labels:\n        app: web\n    spec:\n      containers:\n      - name: web\n        image: nginx:1.27-alpine\n        resources:\n          requests:\n            cpu: \"4\"\n            memory: 64Mi\n"
+    ]
+  },
+  "checks": [
+    {
+      "id": "chk-pod-ready",
+      "description": "Pod of Deployment `web` is Running and Ready",
+      "type": "pod_status_ready",
+      "params": {
+        "namespace": "cka-wl-resources",
+        "label_selector": "app=web",
+        "min_ready": 1
+      },
+      "failure_hint": "Lower the CPU request so the scheduler can place the Pod."
+    },
+    {
+      "id": "chk-cpu-request",
+      "description": "CPU request is `100m`",
+      "type": "kubectl_jsonpath",
+      "params": {
+        "kind": "deployment",
+        "name": "web",
+        "namespace": "cka-wl-resources",
+        "jsonpath": "{.spec.template.spec.containers[0].resources.requests.cpu}",
+        "operator": "equals",
+        "expected": "100m"
+      },
+      "failure_hint": "Patch the container requests.cpu to 100m."
+    }
+  ],
+  "solution": {
+    "manifests": [],
+    "commands": [
+      "kubectl -n cka-wl-resources patch deployment web --type=merge -p='{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"web\",\"image\":\"nginx:1.27-alpine\",\"resources\":{\"requests\":{\"cpu\":\"100m\",\"memory\":\"64Mi\"}}}]}}}}'"
+    ]
+  },
+  "cleanup": {
+    "namespaces": [
+      "cka-wl-resources"
+    ]
+  },
+  "reference_solution": "Lower the CPU request.\n```bash\nkubectl -n cka-wl-resources patch deployment web --type=merge -p='{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"web\",\"image\":\"nginx:1.27-alpine\",\"resources\":{\"requests\":{\"cpu\":\"100m\",\"memory\":\"64Mi\"}}}]}}}}'\n```",
+  "destructive": false,
+  "archetype_id": "wl-resources-cpu",
+  "context_command": "kubectl config use-context cka",
+  "hints": [
+    "Check why pods remain Pending using `k -n cka-wl-resources describe pod` and inspect node allocatable CPU.",
+    "Reduce CPU requests on container `web` inside Deployment `web` so pods fit worker capacity while keeping 2 replicas."
+  ],
+  "fast_solution_commands": [
+    "k -n cka-wl-resources describe nodes | grep -A4 Allocated"
+  ]
+}

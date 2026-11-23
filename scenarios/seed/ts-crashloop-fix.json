@@ -1,0 +1,101 @@
+{
+  "schema_version": "1.2",
+  "id": "seed-ts-crashloop-fix",
+  "title": "Fix a CrashLooping Deployment",
+  "domain": "Troubleshooting",
+  "subtopics": [
+    "CrashLoopBackOff",
+    "Deployment",
+    "Pod logs"
+  ],
+  "difficulty": "exam_standard",
+  "weight": 4,
+  "estimated_minutes": 4,
+  "context_command": "kubectl config use-context cka",
+  "prompt": "The Deployment `web` in namespace `cka-ts-crashloop` is repeatedly crashing and entering `CrashLoopBackOff`.\n\nPerform the following tasks:\n1. Troubleshoot and fix the workload so its Pod becomes `Running` and `Ready`.\n2. Keep the container image `nginx:1.27-alpine` unchanged.",
+  "copy_tokens": [
+    "web",
+    "cka-ts-crashloop",
+    "nginx:1.27-alpine",
+    "CrashLoopBackOff",
+    "Running",
+    "Ready"
+  ],
+  "docs_links": [
+    {
+      "label": "Debug Pods",
+      "url": "https://kubernetes.io/docs/tasks/debug/debug-application/debug-pods/"
+    }
+  ],
+  "setup": {
+    "namespaces": [
+      "cka-ts-crashloop"
+    ],
+    "manifests": [
+      "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n  namespace: cka-ts-crashloop\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: web\n  template:\n    metadata:\n      labels:\n        app: web\n    spec:\n      containers:\n      - name: web\n        image: nginx:1.27-alpine\n        command: [\"sh\", \"-c\", \"exit 1\"]\n"
+    ],
+    "node_commands": []
+  },
+  "checks": [
+    {
+      "id": "chk-pod-ready",
+      "description": "Pod of Deployment `web` is Running and Ready",
+      "type": "pod_status_ready",
+      "params": {
+        "namespace": "cka-ts-crashloop",
+        "label_selector": "app=web",
+        "min_ready": 1
+      },
+      "failure_hint": "The container exits immediately. Inspect `kubectl -n cka-ts-crashloop logs <pod>` and fix the container command."
+    },
+    {
+      "id": "chk-image-kept",
+      "description": "Container image remains `nginx:1.27-alpine`",
+      "type": "kubectl_jsonpath",
+      "params": {
+        "kind": "deployment",
+        "name": "web",
+        "namespace": "cka-ts-crashloop",
+        "jsonpath": "{.spec.template.spec.containers[0].image}",
+        "operator": "equals",
+        "expected": "nginx:1.27-alpine"
+      },
+      "failure_hint": "Do not change the image; fix only the container command."
+    },
+    {
+      "id": "chk-available",
+      "description": "Deployment `web` reports at least 1 available replica",
+      "type": "kubectl_jsonpath",
+      "params": {
+        "kind": "deployment",
+        "name": "web",
+        "namespace": "cka-ts-crashloop",
+        "jsonpath": "{.status.availableReplicas}",
+        "operator": "gte",
+        "expected": 1
+      },
+      "failure_hint": "No replica is available yet \u2014 the Pod must become Ready first."
+    }
+  ],
+  "solution": {
+    "manifests": [],
+    "commands": [
+      "kubectl -n cka-ts-crashloop patch deployment web --type=json -p='[{\"op\":\"remove\",\"path\":\"/spec/template/spec/containers/0/command\"}]'"
+    ]
+  },
+  "cleanup": {
+    "namespaces": [
+      "cka-ts-crashloop"
+    ]
+  },
+  "reference_solution": "The container command is overridden with `exit 1`.\n```bash\nkubectl -n cka-ts-crashloop patch deployment web --type=json -p='[{\"op\":\"remove\",\"path\":\"/spec/template/spec/containers/0/command\"}]'\n```",
+  "destructive": false,
+  "archetype_id": "ts-crashloop-cmd",
+  "hints": [
+    "Check Pod termination reason and logs via `k -n cka-ts-crashloop describe pod` and `k -n cka-ts-crashloop logs`.",
+    "Inspect the container `command` / `args` override inside Deployment `web` and restore normal nginx startup."
+  ],
+  "fast_solution_commands": [
+    "k -n cka-ts-crashloop get deploy web -o yaml"
+  ]
+}

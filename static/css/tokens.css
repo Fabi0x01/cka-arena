@@ -1,0 +1,89 @@
+@layer reset, tokens, base, layout, components, views;
+
+@layer tokens {
+  :root {
+    color-scheme: dark;
+
+    /* Surfaces — Orbital Control Console obsidian luminance ladder */
+    --canvas: oklch(11.5% 0.009 252);
+    --bay: oklch(14.2% 0.010 252);
+    --surface: oklch(17.5% 0.011 252);
+    --surface-raised: oklch(21.2% 0.012 252);
+    --terminal-bg: oklch(10.0% 0.007 252);
+
+    /* Structural hairlines */
+    --line-subtle: oklch(23.5% 0.011 252);
+    --line: oklch(29.0% 0.013 252);
+    --line-strong: oklch(38.0% 0.016 252);
+
+    /* Ink hierarchy */
+    --ink: oklch(94.0% 0.006 252);
+    --ink-muted: oklch(72.0% 0.012 252);
+    --ink-faint: oklch(54.0% 0.014 252);
+
+    /* Accent & Semantic Telemetry */
+    --accent: oklch(76.0% 0.145 208);
+    --accent-ink: oklch(13.0% 0.020 208);
+    --pass: oklch(75.0% 0.165 158);
+    --pass-ink: oklch(13.0% 0.025 158);
+    --warn: oklch(81.0% 0.155 82);
+    --warn-ink: oklch(16.0% 0.025 82);
+    --fail: oklch(67.0% 0.205 18);
+    --flag: oklch(71.0% 0.165 292);
+
+    /* Translucent tints — always mixed in oklab to preserve neutral chromaticity */
+    --hover-bg: color-mix(in oklab, var(--ink) 6%, transparent);
+    --active-bg: color-mix(in oklab, var(--ink) 10%, transparent);
+    --accent-tint: color-mix(in oklab, var(--accent) 14%, transparent);
+    --accent-border: color-mix(in oklab, var(--accent) 42%, transparent);
+    --pass-tint: color-mix(in oklab, var(--pass) 14%, transparent);
+    --pass-border: color-mix(in oklab, var(--pass) 42%, transparent);
+    --warn-tint: color-mix(in oklab, var(--warn) 14%, transparent);
+    --warn-border: color-mix(in oklab, var(--warn) 42%, transparent);
+    --fail-tint: color-mix(in oklab, var(--fail) 14%, transparent);
+    --fail-border: color-mix(in oklab, var(--fail) 42%, transparent);
+    --flag-tint: color-mix(in oklab, var(--flag) 15%, transparent);
+    --flag-border: color-mix(in oklab, var(--flag) 45%, transparent);
+    --backdrop-scrim: oklch(5.0% 0.008 252 / 0.72);
+    --overlay-tint: color-mix(in oklab, var(--surface) 88%, transparent);
+
+    /* Typography */
+    --sans: "Figtree", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+    --text-xs: 0.78rem;
+    --text-sm: 0.84rem;
+    --text-base: 0.90rem;
+    --text-md: 0.96rem;
+    --text-lg: 1.125rem;
+    --text-xl: 1.3125rem;
+    --text-display: 2.75rem;
+
+    /* Scale 4 spacing */
+    --sp-1: 4px;
+    --sp-2: 8px;
+    --sp-3: 12px;
+    --sp-4: 16px;
+    --sp-5: 20px;
+    --sp-6: 24px;
+    --sp-8: 32px;
+
+    /* Geometry & Depth */
+    --r-xs: 4px;
+    --r-sm: 6px;
+    --r-md: 10px;
+    --r-lg: 14px;
+    --r-pill: 999px;
+
+    --shadow-sm: 0 2px 6px oklch(0% 0 0 / 0.35);
+    --shadow-overlay: 0 6px 10px oklch(0% 0 0 / 0.48);
+
+    /* Motion */
+    --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+    --t-fast: 140ms;
+    --t-mid: 200ms;
+
+    --scrollbar-thumb: oklch(34% 0.012 252);
+    --scrollbar-track: transparent;
+  }
+}

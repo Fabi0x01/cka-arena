@@ -1,0 +1,113 @@
+{
+  "schema_version": "1.2",
+  "id": "seed-st-pv-claimref",
+  "title": "Unblock a Pending PVC",
+  "domain": "Storage",
+  "subtopics": [
+    "PersistentVolume",
+    "PersistentVolumeClaim",
+    "claimRef"
+  ],
+  "difficulty": "killer_hardcore",
+  "weight": 7,
+  "estimated_minutes": 5,
+  "prompt": "In namespace `cka-st-pv`, PersistentVolumeClaim `pvc-data` stays `Pending`: PersistentVolume `pv-data` is pre-bound to a different claim via `claimRef`.\n\nPerform the following tasks:\n1. Fix PersistentVolume `pv-data` so PersistentVolumeClaim `pvc-data` binds to it.\n2. Do not delete the PersistentVolume or the claim.\n3. Make the Pod of Deployment `web` become `Ready`.",
+  "copy_tokens": [
+    "cka-st-pv",
+    "pvc-data",
+    "pv-data",
+    "claimRef",
+    "web"
+  ],
+  "docs_links": [
+    {
+      "label": "Configure a Pod to Use a PVC",
+      "url": "https://kubernetes.io/docs/tasks/configure-pod-container/configure-persistent-volume-storage/"
+    }
+  ],
+  "setup": {
+    "namespaces": [
+      "cka-st-pv"
+    ],
+    "manifests": [
+      "apiVersion: v1\nkind: PersistentVolume\nmetadata:\n  name: pv-data\nspec:\n  capacity:\n    storage: 1Gi\n  accessModes:\n  - ReadWriteOnce\n  storageClassName: manual\n  claimRef:\n    namespace: cka-st-pv\n    name: other-pvc\n  hostPath:\n    path: /tmp/cka-st-pv-data\n    type: DirectoryOrCreate\n",
+      "apiVersion: v1\nkind: PersistentVolumeClaim\nmetadata:\n  name: pvc-data\n  namespace: cka-st-pv\nspec:\n  accessModes:\n  - ReadWriteOnce\n  storageClassName: manual\n  resources:\n    requests:\n      storage: 1Gi\n",
+      "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n  namespace: cka-st-pv\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: web\n  template:\n    metadata:\n      labels:\n        app: web\n    spec:\n      containers:\n      - name: web\n        image: nginx:1.27-alpine\n        volumeMounts:\n        - name: data\n          mountPath: /usr/share/nginx/html\n      volumes:\n      - name: data\n        persistentVolumeClaim:\n          claimName: pvc-data\n"
+    ]
+  },
+  "checks": [
+    {
+      "id": "chk-pvc-bound",
+      "description": "PVC `pvc-data` is `Bound`",
+      "type": "kubectl_jsonpath",
+      "params": {
+        "kind": "pvc",
+        "name": "pvc-data",
+        "namespace": "cka-st-pv",
+        "jsonpath": "{.status.phase}",
+        "operator": "equals",
+        "expected": "Bound"
+      },
+      "failure_hint": "The PV is pre-bound to other-pvc \u2014 remove the stale claimRef."
+    },
+    {
+      "id": "chk-pv",
+      "description": "PersistentVolume `pv-data` still exists",
+      "type": "kubectl_resource_exists",
+      "params": {
+        "kind": "pv",
+        "name": "pv-data"
+      },
+      "failure_hint": "Do not delete the PersistentVolume."
+    },
+    {
+      "id": "chk-pv-capacity",
+      "description": "PV capacity is `1Gi`",
+      "type": "kubectl_jsonpath",
+      "params": {
+        "kind": "pv",
+        "name": "pv-data",
+        "jsonpath": "{.spec.capacity.storage}",
+        "operator": "equals",
+        "expected": "1Gi"
+      },
+      "failure_hint": "Keep the PV capacity at 1Gi."
+    },
+    {
+      "id": "chk-pod-ready",
+      "description": "Pod of Deployment `web` is Ready",
+      "type": "pod_status_ready",
+      "params": {
+        "namespace": "cka-st-pv",
+        "label_selector": "app=web",
+        "min_ready": 1
+      },
+      "failure_hint": "The Pod cannot start until the claim binds."
+    }
+  ],
+  "solution": {
+    "manifests": [],
+    "commands": [
+      "kubectl patch pv pv-data --type=json -p='[{\"op\":\"remove\",\"path\":\"/spec/claimRef\"}]'"
+    ]
+  },
+  "cleanup": {
+    "namespaces": [
+      "cka-st-pv"
+    ],
+    "commands": [
+      "kubectl delete pv pv-data --ignore-not-found"
+    ]
+  },
+  "reference_solution": "Clear the stale claimRef.\n```bash\nkubectl patch pv pv-data --type=json -p='[{\"op\":\"remove\",\"path\":\"/spec/claimRef\"}]'\n```",
+  "destructive": false,
+  "archetype_id": "st-pv-claimref",
+  "context_command": "kubectl config use-context cka",
+  "hints": [
+    "Check PV and PVC status with `k get pv pv-data` and `k -n cka-st-pv get pvc` to see why binding stalls.",
+    "A Released PV retains a stale `spec.claimRef` pointing to a deleted claim; remove `spec.claimRef` so the PV returns to Available."
+  ],
+  "fast_solution_commands": [
+    "k patch pv pv-data --type=json -p='[{\"op\":\"remove\",\"path\":\"/spec/claimRef\"}]'"
+  ]
+}

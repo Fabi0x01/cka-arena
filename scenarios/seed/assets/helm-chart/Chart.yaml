@@ -1,0 +1,6 @@
+apiVersion: v2
+name: cka-helm-chart
+description: Minimal chart used by CKA Arena Helm seed
+type: application
+version: 0.1.0
+appVersion: "1.27"

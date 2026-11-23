@@ -1,0 +1,8 @@
+{
+  "_comment": "Copy to llm_config.json (git-ignored) or configure in Settings -> AI provider. AI generation is optional.",
+  "provider": "deepseek",
+  "api_key": "sk-...",
+  "model": "deepseek-v4-pro",
+  "model_flash": "deepseek-flash",
+  "timeout_s": 300
+}

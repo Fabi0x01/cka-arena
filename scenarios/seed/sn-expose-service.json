@@ -1,0 +1,109 @@
+{
+  "schema_version": "1.2",
+  "id": "seed-sn-expose-service",
+  "title": "Expose a Deployment with a Service",
+  "domain": "Services & Networking",
+  "subtopics": [
+    "Service",
+    "ClusterIP",
+    "Endpoints",
+    "DNS"
+  ],
+  "difficulty": "exam_standard",
+  "weight": 4,
+  "estimated_minutes": 4,
+  "context_command": "kubectl config use-context cka",
+  "prompt": "A Deployment `web` is running in namespace `cka-net` with its Pods serving HTTP on port `80`.\n\nPerform the following tasks:\n1. Create a Service named `web-svc` of type `ClusterIP` in namespace `cka-net`.\n2. The Service must expose port `80` and route traffic to the Pods of the Deployment.",
+  "copy_tokens": [
+    "web",
+    "cka-net",
+    "web-svc",
+    "ClusterIP",
+    "80"
+  ],
+  "docs_links": [
+    {
+      "label": "Services",
+      "url": "https://kubernetes.io/docs/concepts/services-networking/service/"
+    }
+  ],
+  "setup": {
+    "namespaces": [
+      "cka-net"
+    ],
+    "manifests": [
+      "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n  namespace: cka-net\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: web\n  template:\n    metadata:\n      labels:\n        app: web\n    spec:\n      containers:\n      - name: web\n        image: nginx:1.27-alpine\n        ports:\n        - containerPort: 80\n"
+    ],
+    "node_commands": []
+  },
+  "checks": [
+    {
+      "id": "chk-service-exists",
+      "description": "Service `web-svc` exists in `cka-net`",
+      "type": "kubectl_resource_exists",
+      "params": {
+        "kind": "service",
+        "name": "web-svc",
+        "namespace": "cka-net"
+      },
+      "failure_hint": "Create the Service with `kubectl expose` or a manifest."
+    },
+    {
+      "id": "chk-service-type",
+      "description": "Service `web-svc` is of type `ClusterIP`",
+      "type": "kubectl_jsonpath",
+      "params": {
+        "kind": "service",
+        "name": "web-svc",
+        "namespace": "cka-net",
+        "jsonpath": "{.spec.type}",
+        "operator": "equals",
+        "expected": "ClusterIP"
+      },
+      "failure_hint": "The Service type must be `ClusterIP`."
+    },
+    {
+      "id": "chk-http-reachable",
+      "description": "The Service responds with HTTP 200 from inside the cluster",
+      "type": "pod_exec_exit_zero",
+      "params": {
+        "namespace": "cka-net",
+        "ephemeral_probe": true,
+        "command": [
+          "curl",
+          "-sS",
+          "--max-time",
+          "5",
+          "-o",
+          "/dev/null",
+          "-w",
+          "%{http_code}",
+          "http://web-svc.cka-net.svc.cluster.local"
+        ],
+        "stdout_contains": "200"
+      },
+      "failure_hint": "DNS or endpoints are not working: verify the Service selector matches the Pod labels and the targetPort is 80."
+    }
+  ],
+  "solution": {
+    "manifests": [],
+    "commands": [
+      "kubectl -n cka-net expose deployment web --name=web-svc --port=80 --target-port=80 --type=ClusterIP"
+    ]
+  },
+  "cleanup": {
+    "namespaces": [
+      "cka-net"
+    ]
+  },
+  "reference_solution": "Expose the Deployment.\n```bash\nkubectl -n cka-net expose deployment web --name=web-svc --port=80 --target-port=80 --type=ClusterIP\n```",
+  "destructive": false,
+  "archetype_id": "sn-expose-clusterip",
+  "hints": [
+    "Inspect the Deployment labels and containerPort using `k -n cka-net get deploy web -o yaml`.",
+    "Expose Deployment `web` on TCP port 80 and verify endpoints appear under `k -n cka-net get endpoints web-svc`."
+  ],
+  "fast_solution_commands": [
+    "k -n cka-net expose deploy web --name=web-svc --port=80 --target-port=80 --type=ClusterIP"
+  ]
+}

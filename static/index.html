@@ -1,0 +1,705 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>CKA Arena</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2322d3ee' stroke-width='2'%3E%3Cpath d='M12 2.5 21 7.8v8.4L12 21.5 3 16.2V7.8l9-5.3Z'/%3E%3Cpath d='M12 7.5 16.5 10v4L12 16.5 7.5 14v-4L12 7.5Z'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="/static/css/tokens.css?v=3.4">
+  <link rel="stylesheet" href="/static/css/base.css?v=3.4">
+  <link rel="stylesheet" href="/static/css/layout.css?v=3.4">
+  <link rel="stylesheet" href="/static/css/components.css?v=3.4">
+  <link rel="stylesheet" href="/static/vendor/xterm/xterm.css">
+  <link rel="stylesheet" href="/static/css/views.css?v=3.6">
+</head>
+<body>
+<div class="app-shell">
+  <aside class="rail">
+    <div class="rail-brand" title="CKA Arena">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 2.5 21 7.8v8.4L12 21.5 3 16.2V7.8l9-5.3Z"/>
+        <path d="M12 7.5 16.5 10v4L12 16.5 7.5 14v-4L12 7.5Z"/>
+      </svg>
+    </div>
+
+    <nav class="rail-nav">
+      <button type="button" class="rail-btn on" id="btn-view-arena" title="Arena Workspace (⌘1)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+      </button>
+      <button type="button" class="rail-btn" id="btn-view-readiness" title="CKA Readiness &amp; Skill Tree (⌘2)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 14l4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg>
+      </button>
+      <button type="button" class="rail-btn" id="btn-view-studio" title="Scenario Studio &amp; Bank (⌘3)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg>
+      </button>
+      <button type="button" class="rail-btn" id="btn-view-settings" title="Cluster &amp; Settings (⌘4)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+      </button>
+      <button type="button" class="rail-btn" id="btn-view-study" title="CKA Study Codex (⌘5)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+      </button>
+    </nav>
+
+    <div class="rail-divider"></div>
+
+    <button type="button" class="rail-btn" id="btn-palette" title="Command Palette (⌘K)">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3Z"/></svg>
+    </button>
+
+    <div class="rail-spacer"></div>
+
+    <div class="rail-footer">
+      <button type="button" class="power-rail-btn" id="power-rail-btn" data-state="unknown" popovertarget="power-menu" title="Cluster Power &amp; Status">
+        <span class="dot"></span>
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/></svg>
+      </button>
+      <div class="anchored-menu" id="power-menu" popover="auto"></div>
+      <button type="button" class="rail-btn" id="btn-shortcuts" title="Keyboard Shortcuts (⌘/)">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      </button>
+    </div>
+  </aside>
+
+  <div class="stage">
+    <header class="topbar">
+      <div class="topbar-context">
+        <span class="topbar-view-title" id="topbar-view-title">Arena</span>
+        <div class="queue" id="queue"></div>
+      </div>
+      <div class="topbar-right">
+        <span class="exam-timer" id="exam-timer" hidden>120:00</span>
+        <span class="exam-pacing" id="exam-pacing" hidden></span>
+        <button type="button" class="btn sm ghost" id="btn-topbar-palette" title="Command Palette (⌘K)">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <kbd>⌘K</kbd>
+        </button>
+        <button type="button" class="btn sm danger" id="btn-end-session" hidden title="End active session &amp; clean cluster">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
+          End Session
+        </button>
+        <button type="button" class="btn sm primary" id="btn-practice">New Session</button>
+      </div>
+    </header>
+
+    <main class="workspace" id="content">
+      <section class="bay-col" id="col-question">
+        <div class="bay-scroll" id="q-scroll">
+          <div id="workspace-empty" class="empty-state">
+            <div class="empty-head">
+              <h2>Mission Control Ready</h2>
+              <p>Launch a practice session drawn by official CNCF CKA exam weights, simulate a timed Blind Mock Exam, or build targeted scenarios in Studio.</p>
+            </div>
+            <div class="mission-grid">
+              <button type="button" class="mission-btn" id="quick-study">
+                <div class="mission-btn-top">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  <span>Study Mode (5)</span>
+                </div>
+                <span class="mission-btn-desc">Immediate check feedback, progressive hints L1–L3, Speed Coach post-mortem.</span>
+              </button>
+              <button type="button" class="mission-btn" id="quick-blind">
+                <div class="mission-btn-top">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                  <span>Blind Mock Exam (15)</span>
+                </div>
+                <span class="mission-btn-desc">120-minute PSI simulation. Free non-destructive navigation, graded on Submit.</span>
+              </button>
+              <button type="button" class="mission-btn" id="quick-weak">
+                <div class="mission-btn-top">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 14l4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg>
+                  <span>Weakness Drill (5)</span>
+                </div>
+                <span class="mission-btn-desc">Prioritizes SM-2 due reviews, weakest archetypes, and unpracticed topics.</span>
+              </button>
+              <button type="button" class="mission-btn" id="quick-speed">
+                <div class="mission-btn-top">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                  <span>Speed Blitz (5)</span>
+                </div>
+                <span class="mission-btn-desc">Short high-frequency tasks calibrated for imperative kubectl speed.</span>
+              </button>
+            </div>
+            <div class="pill-row">
+              <button type="button" class="btn primary" id="empty-practice">Configure Practice</button>
+              <button type="button" class="btn" id="empty-generate">Open Studio</button>
+            </div>
+          </div>
+
+          <div id="workspace-loading" class="skeleton-group" hidden>
+            <div class="skeleton-head">
+              <span class="spinner"></span>
+              <span id="workspace-loading-text">Preparing cluster scenario…</span>
+            </div>
+          </div>
+
+          <div id="workspace-body" hidden>
+            <div class="meta-row">
+              <span class="meta-domain" id="q-domain"></span>
+              <span>·</span>
+              <span id="q-weight"></span>
+              <span class="pill warn" id="q-destructive" hidden>destructive</span>
+              <span class="timer" id="q-timer">--:--</span>
+            </div>
+            <div class="q-progress-track">
+              <div class="q-progress-fill" id="q-progress-fill"></div>
+            </div>
+
+            <div class="context-strip">
+              <span class="label">Context &amp; Node Access</span>
+              <div class="pill-row" id="q-context"></div>
+            </div>
+
+            <h2 class="task-title" id="q-title"></h2>
+
+            <div class="q-subbar">
+              <div class="subtabs" id="q-subtabs">
+                <button type="button" class="subtab on" id="q-tab-task">Task &amp; Check</button>
+                <button type="button" class="subtab" id="q-tab-notes">Checklist &amp; Notes <span class="subtab-badge" id="q-check-badge">0/0</span></button>
+                <button type="button" class="subtab" id="q-tab-hints">Hints &amp; Docs <span class="subtab-badge" id="q-hint-badge">0/3</span></button>
+              </div>
+            </div>
+
+            <div id="q-pane-task">
+              <div class="prompt-body" id="q-prompt"></div>
+              <div class="drawer" id="check-drawer" hidden></div>
+              <div class="drawer" id="postmortem-drawer" hidden></div>
+            </div>
+
+            <div id="q-pane-notes" hidden>
+              <div id="q-checklist" class="checklist" hidden></div>
+              <div class="field">
+                <span>Exam Scratchpad</span>
+                <textarea class="input notepad-input" id="q-notes" rows="6" placeholder="YAML snippets, node IPs, verification reminders for this question…"></textarea>
+              </div>
+            </div>
+
+            <div id="q-pane-hints" hidden>
+              <div id="hint-drawer" hidden></div>
+              <div class="section-title">Scenario Documentation</div>
+              <div class="docs-links" id="q-docs"></div>
+              <div class="allowed-docs">
+                <span>Exam-allowed domains:</span>
+                <a href="https://kubernetes.io/docs/" target="_blank" rel="noreferrer">kubernetes.io/docs</a>
+                <a href="https://helm.sh/docs/" target="_blank" rel="noreferrer">helm.sh/docs</a>
+                <a href="https://gateway.networking.k8s.io/" target="_blank" rel="noreferrer">gateway.networking.k8s.io</a>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <footer class="action-bar">
+          <button type="button" class="btn sm ghost" id="btn-reset" title="Reset scenario">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+            Reset
+          </button>
+          <button type="button" class="btn sm ghost" id="btn-skip" title="Skip question">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/></svg>
+            Skip
+          </button>
+          <button type="button" class="btn sm ghost" id="btn-flag" hidden title="Flag for review">Flag</button>
+          <button type="button" class="btn sm ghost" id="btn-hint" title="Reveal progressive hint">Hint</button>
+          <button type="button" class="btn sm ghost" id="btn-retire" title="Report &amp; retire broken question">Report</button>
+          <div class="grow"></div>
+          <button type="button" class="check-btn" id="btn-check">Check <kbd>⌘↵</kbd></button>
+          <button type="button" class="btn sm primary" id="btn-submit-exam" hidden>Submit Exam</button>
+          <button type="button" class="btn sm" id="btn-next" disabled>Next →</button>
+          <button type="button" class="btn sm primary" id="btn-show-terminal" hidden title="Show built-in terminal (⌘\)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+            Show Terminal
+          </button>
+        </footer>
+      </section>
+
+      <div class="split-handle" id="split-handle" title="Drag to resize panes"></div>
+
+      <section class="bay-col term-bay" id="col-terminal">
+        <div class="term-tabs" id="term-tabs"></div>
+        <div class="term-viewport">
+          <div class="term-search" id="term-search" hidden>
+            <input class="input" id="term-search-input" placeholder="Find in terminal…">
+            <span class="term-search-count" id="term-search-count">0/0</span>
+            <button type="button" class="btn sm ghost" id="term-search-prev" title="Previous">Prev</button>
+            <button type="button" class="btn sm ghost" id="term-search-next" title="Next">Next</button>
+            <button type="button" class="btn sm ghost" id="term-search-close" title="Close">Close</button>
+          </div>
+          <div class="term-screen" id="term-screen"></div>
+        </div>
+        <footer class="action-bar">
+          <button type="button" class="btn sm" id="btn-new-tab" popovertarget="new-tab-menu">+ Shell</button>
+          <div class="anchored-menu" id="new-tab-menu" popover="auto">
+            <button type="button" data-open-tab="host"><span>Local shell</span><small>scratch</small></button>
+            <button type="button" data-open-tab="node" data-node="controlplane"><span>controlplane</span><small>ssh</small></button>
+            <button type="button" data-open-tab="node" data-node="node01"><span>node01</span><small>ssh</small></button>
+            <button type="button" data-open-tab="node" data-node="node02"><span>node02</span><small>ssh</small></button>
+          </div>
+          <span class="term-workdir" id="term-workdir"></span>
+          <div class="grow"></div>
+          <button type="button" class="btn sm ghost" id="btn-term-search" title="Search scrollback (⌘F)">Find</button>
+          <button type="button" class="btn sm ghost" id="btn-zen" title="Zen Terminal (⌘B)">Zen</button>
+          <button type="button" class="btn sm ghost" id="btn-native" title="Hide built-in terminal for native iTerm2/Ghostty (⌘\)">Native</button>
+          <button type="button" class="btn sm ghost" id="btn-term-clear" title="Clear terminal (⌘L)">Clear</button>
+          <button type="button" class="btn sm primary" id="btn-term-check" disabled title="Check solution (⌘↵)">Check</button>
+        </footer>
+      </section>
+    </main>
+
+    <div class="view-panel" id="view-readiness">
+      <section class="bay-col">
+        <div class="bay-scroll">
+          <header class="view-head">
+            <h1>CKA Exam Readiness</h1>
+            <p>Go/No-Go readiness across CNCF CKA domains (passing bar 66%), weighted mocks, SM-2 mastery, syllabus breadth, and speed pacing.</p>
+          </header>
+          <div class="readiness-hero" id="readiness-summary">
+            <div class="row">Loading readiness metrics…</div>
+          </div>
+          <div class="crit-grid" id="readiness-criteria"></div>
+          <div class="section-title" style="margin-block-start:20px">Targeted Drills</div>
+          <div class="pill-row">
+            <button type="button" class="btn sm primary" id="btn-drill-weak">Weakness Drill (5)</button>
+            <button type="button" class="btn sm" id="btn-drill-speed">Speed Blitz (5)</button>
+            <button type="button" class="btn sm" id="btn-drill-replay">Mistake Replay (5)</button>
+            <button type="button" class="btn sm" id="btn-drill-blind">Blind Mock Exam (15)</button>
+            <button type="button" class="btn sm ghost" id="btn-readiness-refresh">Refresh</button>
+          </div>
+          <div class="section-title" style="margin-block-start:20px">Recent Mock Exams</div>
+          <div class="progress-list" id="recent-mocks-body"><div class="row">Loading…</div></div>
+        </div>
+      </section>
+      <section class="bay-col">
+        <div class="bay-scroll">
+          <header class="view-head">
+            <h1>CNCF CKA Skill Tree</h1>
+            <p>Filter all 59 curriculum archetypes by domain or SM-2 status, launch targeted Practice, or trigger AI Generation directly.</p>
+          </header>
+          <div class="skill-toolbar">
+            <div class="skill-toolbar-row" id="skill-domain-filters"></div>
+            <div class="skill-toolbar-row">
+              <div class="choice-row" id="skill-status-filters">
+                <label class="choice"><input type="radio" name="skill-status" value="all" checked> All</label>
+                <label class="choice"><input type="radio" name="skill-status" value="weak"> Weak</label>
+                <label class="choice"><input type="radio" name="skill-status" value="review_due"> Due</label>
+                <label class="choice"><input type="radio" name="skill-status" value="unseen"> Unseen</label>
+                <label class="choice"><input type="radio" name="skill-status" value="mastered"> Mastered</label>
+              </div>
+              <input class="input skill-search" id="skill-search" placeholder="Filter archetype or subtopic…">
+            </div>
+          </div>
+          <div id="skill-tree-body" class="skill-tree">Loading skill tree…</div>
+        </div>
+      </section>
+    </div>
+
+    <div class="view-panel" id="view-study">
+      <section class="bay-col study-nav-bay">
+        <div class="bay-scroll">
+          <div class="study-hud" id="study-hud">
+            <div class="row">Loading Study Codex…</div>
+          </div>
+
+          <div class="study-controls">
+            <div class="skill-toolbar-row" id="study-domains"></div>
+            <div class="skill-toolbar-row">
+              <div class="choice-row" id="study-status-filters">
+                <label class="choice"><input type="radio" name="study-status" value="all" checked> All</label>
+                <label class="choice"><input type="radio" name="study-status" value="remaining"> Remaining</label>
+                <label class="choice"><input type="radio" name="study-status" value="cleared"> Cleared</label>
+              </div>
+              <input class="input skill-search" id="study-search" placeholder="Search topics, kubectl, YAML…">
+            </div>
+          </div>
+
+          <div id="study-topic-list" class="study-topic-list">Loading curriculum…</div>
+        </div>
+      </section>
+
+      <section class="bay-col study-reader-bay">
+        <div class="bay-scroll" id="study-reader-scroll">
+          <div id="study-reader" class="study-reader">
+            <div class="study-reader-head">
+              <div class="study-head-meta">
+                <span class="label" id="study-topic-meta">CKA STUDY CODEX</span>
+                <span class="badge accent" id="study-topic-xp">0 / 120 XP</span>
+              </div>
+              <div class="study-head-title-row">
+                <div>
+                  <h1 id="study-topic-title">Select a topic</h1>
+                  <p class="study-head-sub" id="study-topic-sub">Complete all 4 checkpoints (Concept, Practice, Cheat Sheet &amp; 3-Q Boss Gauntlet) to unlock 120 XP.</p>
+                </div>
+                <div class="pill-row">
+                  <button type="button" class="btn sm ghost" id="study-prev" disabled>← Prev</button>
+                  <button type="button" class="btn sm ghost" id="study-next" disabled>Next →</button>
+                </div>
+              </div>
+              <div class="subtabs study-stage-tabs" id="study-stage-tabs"></div>
+            </div>
+
+            <div id="study-stage-body" class="study-stage-body">
+              <div class="row" style="color:var(--ink-muted)">Loading topic…</div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div class="view-panel" id="view-studio">
+      <section class="bay-col">
+        <div class="bay-scroll">
+          <header class="view-head">
+            <h1>Scenario Studio</h1>
+            <p>Generate verified CKA 2025/2026 scenarios with AI. Click any Heatmap cell on the right to pre-fill domain and tier.</p>
+          </header>
+          <div class="field">
+            <span>Domains</span>
+            <div class="choice-row" id="gen-domains"></div>
+          </div>
+          <div class="field">
+            <span>Difficulty</span>
+            <select class="input" id="gen-difficulty">
+              <option value="exam_standard">Exam Standard</option>
+              <option value="killer_hardcore">Killer.sh Hardcore</option>
+              <option value="boss_fight">Boss Fight</option>
+            </select>
+          </div>
+          <div class="field">
+            <span>Question count</span>
+            <div class="choice-row" id="gen-count"></div>
+          </div>
+          <div class="field">
+            <span>Extra focus (optional)</span>
+            <input class="input" id="gen-focus" placeholder="e.g. static pods, Gateway API, no Helm">
+          </div>
+          <div class="pill-row">
+            <button type="button" class="btn primary" id="btn-generate">Generate with AI</button>
+            <button type="button" class="btn" id="btn-fill-gaps">Fill Weak Cells (5×3)</button>
+            <button type="button" class="btn ghost" id="btn-audit-bank">Audit Legacy Bank</button>
+          </div>
+        </div>
+      </section>
+      <section class="bay-col">
+        <div class="bay-scroll">
+          <div class="q-subbar">
+            <div>
+              <h1 style="font-size:var(--text-xl);font-weight:650;letter-spacing:-0.02em">Bank &amp; Pipeline</h1>
+              <p id="bank-line" style="font-size:var(--text-xs);color:var(--ink-muted)">Loading bank…</p>
+            </div>
+            <div class="subtabs">
+              <button type="button" class="subtab on" id="studio-tab-pipeline">Pipeline &amp; Coverage</button>
+              <button type="button" class="subtab" id="studio-tab-bank">Bank Inspector <span class="subtab-badge" id="studio-badge-draft" hidden>0</span></button>
+            </div>
+          </div>
+
+          <div id="studio-pane-pipeline" class="stack">
+            <div>
+              <div class="section-title">Pipeline execution</div>
+              <div id="gen-idle" class="progress-list"><div class="row">Idle — no active generation job.</div></div>
+              <div id="gen-card" class="gen-card" hidden>
+                <div class="gen-head">
+                  <span class="gen-status" id="gen-status">running</span>
+                  <span class="gen-meta" id="gen-meta">—</span>
+                  <span class="gen-counts" id="gen-counts"></span>
+                  <button type="button" class="btn sm danger" id="btn-gen-cancel" hidden>Cancel</button>
+                </div>
+                <div class="stage-stepper" id="gen-stepper"></div>
+                <div class="gen-bar"><div class="gen-bar-fill" id="gen-bar-fill"></div></div>
+                <div class="gen-scenarios" id="gen-scenarios"></div>
+                <details class="gen-log" style="margin-block-start:10px">
+                  <summary style="cursor:pointer;font-size:var(--text-xs);color:var(--ink-muted)">Event log</summary>
+                  <div class="progress-list" id="gen-log" style="max-block-size:150px;overflow:auto;margin-block-start:6px"></div>
+                </details>
+              </div>
+            </div>
+            <div>
+              <div class="section-title">Coverage matrix · published</div>
+              <div class="coverage-scroll"><div class="coverage" id="coverage-grid"></div></div>
+              <p id="coverage-note" style="font-size:var(--text-xs);color:var(--ink-muted);margin-block-start:8px"></p>
+            </div>
+            <div>
+              <div class="section-title">Performance by domain</div>
+              <div class="progress-list" id="perf-body"><div class="row">No sessions yet.</div></div>
+              <p id="perf-note" style="font-size:var(--text-xs);color:var(--ink-muted);margin-block-start:8px"></p>
+            </div>
+          </div>
+
+          <div id="studio-pane-bank" class="stack" hidden>
+            <div>
+              <div class="bank-toolbar">
+                <div class="choice-row" id="bank-state-filter">
+                  <label class="choice"><input type="radio" name="bank-state" value="published" checked> Published (<span id="cnt-published">0</span>)</label>
+                  <label class="choice"><input type="radio" name="bank-state" value="draft"> Quarantine (<span id="cnt-draft">0</span>)</label>
+                  <label class="choice"><input type="radio" name="bank-state" value="retired"> Retired (<span id="cnt-retired">0</span>)</label>
+                </div>
+                <input class="input bank-search" id="bank-search" placeholder="Filter by title or topic…">
+                <button type="button" class="btn sm" id="btn-bank-refresh">Refresh</button>
+              </div>
+              <div id="bank-list" class="bank-list"><div class="row">Loading…</div></div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div class="view-panel" id="view-settings">
+      <section class="bay-col">
+        <div class="bay-scroll">
+          <header class="view-head">
+            <h1>Cluster Telemetry</h1>
+            <p>Live status of Multipass kubeadm nodes, CNI/Gateway/Metrics addons, and baseline file integrity.</p>
+          </header>
+          <div class="stack">
+            <div>
+              <div class="section-title">
+                <span>Nodes</span>
+                <button type="button" class="btn sm ghost" id="btn-health-refresh">Refresh</button>
+              </div>
+              <div id="health-summary" class="progress-list" style="margin-block-end:10px"><div class="row">Checking…</div></div>
+              <div class="node-grid" id="health-nodes"></div>
+            </div>
+            <div>
+              <div class="section-title">Cluster addons</div>
+              <div class="addon-grid" id="health-addons"></div>
+            </div>
+            <div>
+              <div class="section-title">Addon bootstrap hints</div>
+              <div id="bootstrap-body" class="progress-list"><div class="row">—</div></div>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section class="bay-col">
+        <div class="bay-scroll">
+          <header class="view-head">
+            <h1>Platform &amp; AI Provider</h1>
+            <p>Generation provider configuration, isolated scratch runtime, and clean baseline recovery (L2).</p>
+          </header>
+          <div class="stack">
+            <div>
+              <div class="section-title">AI provider</div>
+              <div class="field">
+                <span>Provider</span>
+                <select class="input" id="llm-provider"></select>
+              </div>
+              <div class="field">
+                <span>Base URL</span>
+                <input class="input" id="llm-base-url" placeholder="https://api.example.com/v1">
+              </div>
+              <div class="field-row">
+                <label class="field">
+                  <span>Auth mode</span>
+                  <select class="input" id="llm-auth-mode">
+                    <option value="api_key">API key</option>
+                    <option value="auth_token">Auth token</option>
+                    <option value="none">None (local Ollama)</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Thinking mode</span>
+                  <select class="input" id="llm-thinking">
+                    <option value="off">Off (fast default)</option>
+                    <option value="on">On (reasoning)</option>
+                  </select>
+                </label>
+              </div>
+              <div class="field">
+                <span>API key</span>
+                <input class="input" id="llm-api-key" type="password" autocomplete="off" placeholder="leave blank to keep stored key">
+                <label class="choice" style="margin-block-start:8px">
+                  <input type="checkbox" id="llm-clear-key"> Clear stored key
+                </label>
+              </div>
+              <div class="field-row">
+                <label class="field"><span>Model</span><select class="input" id="llm-model"></select></label>
+                <label class="field"><span>Fast model (flash)</span><select class="input" id="llm-model-flash"></select></label>
+              </div>
+              <div class="field-row">
+                <label class="field">
+                  <span>Custom model override (optional)</span>
+                  <input class="input" id="llm-model-custom" placeholder="e.g. qwen2.5-coder:14b">
+                </label>
+                <label class="field">
+                  <span>Timeout (seconds)</span>
+                  <input class="input" id="llm-timeout" type="number" min="5" max="600">
+                </label>
+              </div>
+              <div class="pill-row">
+                <button type="button" class="btn primary" id="btn-llm-save">Save provider</button>
+                <button type="button" class="btn sm" id="btn-llm-test">Test connection</button>
+              </div>
+              <div id="llm-body" class="progress-list" style="margin-block-start:10px"><div class="row">Loading…</div></div>
+            </div>
+            <div>
+              <div class="section-title">Terminal isolation</div>
+              <div class="progress-list">
+                <div class="row">workdir · ~/.cka-arena/scratch/&lt;tab&gt; (symlinked ./assets)</div>
+                <div class="row">kubectl · dedicated kubeconfig (cka / cka-ops / cka-edge)</div>
+                <div class="row">shell · KUBE_EDITOR=vim, alias vi=vim, k=kubectl, $do, $now · PSI vimrc</div>
+              </div>
+            </div>
+            <div class="danger-zone">
+              <div class="section-title" style="border-color:var(--fail-border);color:var(--fail)">Clean reset (L2)</div>
+              <p style="font-size:var(--text-xs);color:var(--ink-muted);margin-block-end:12px">Removes all scenario resources, restores node baseline files and restarts containerd/kubelet while keeping installed addons (~1–2 minutes).</p>
+              <button type="button" class="btn sm danger" id="btn-baseline">Run clean reset</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<!-- Command Palette (⌘K) -->
+<dialog id="command-palette" class="palette-dialog" closedby="any">
+  <div class="palette-search-wrap">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    <input class="palette-input" id="palette-input" placeholder="Jump to view, drill, SSH node, or cluster action…" autocomplete="off">
+    <kbd>ESC</kbd>
+  </div>
+  <div class="palette-list" id="palette-list"></div>
+  <div class="palette-foot">
+    <span><kbd>↑</kbd> <kbd>↓</kbd> navigate</span>
+    <span><kbd>↵</kbd> execute</span>
+    <span><kbd>esc</kbd> close</span>
+  </div>
+</dialog>
+
+<!-- Practice Modal -->
+<dialog id="practice-modal" closedby="any">
+  <div class="dialog-head">
+    <h2>Configure Practice Session</h2>
+    <p class="sub">Drawn by official CNCF CKA exam weights (Troubleshooting 30 · Cluster Arch 25 · Services &amp; Networking 20 · Workloads 15 · Storage 10).</p>
+  </div>
+  <div class="dialog-body">
+    <div class="field">
+      <span>Mode</span>
+      <div class="choice-row" id="practice-mode">
+        <label class="choice"><input type="radio" name="practice-mode" value="study" checked> Study Mode</label>
+        <label class="choice"><input type="radio" name="practice-mode" value="blind_exam"> Blind Mock Exam (120m)</label>
+        <label class="choice"><input type="radio" name="practice-mode" value="guided_mock"> Guided Mock (120m)</label>
+        <label class="choice"><input type="radio" name="practice-mode" value="weakness_drill"> Weakness Drill</label>
+        <label class="choice"><input type="radio" name="practice-mode" value="speed_blitz"> Speed Blitz</label>
+        <label class="choice"><input type="radio" name="practice-mode" value="mistake_replay"> Mistake Replay (SRS)</label>
+      </div>
+    </div>
+    <div class="field">
+      <span>Questions</span>
+      <div class="choice-row" id="practice-count"></div>
+    </div>
+    <div class="field">
+      <span>Domains (all by default)</span>
+      <div class="choice-row" id="practice-domains"></div>
+    </div>
+    <div class="field">
+      <span>Difficulty filter</span>
+      <select class="input" id="practice-difficulty">
+        <option value="">All difficulties</option>
+        <option value="exam_standard">Exam Standard</option>
+        <option value="killer_hardcore">Killer.sh Hardcore</option>
+        <option value="boss_fight">Boss Fight</option>
+      </select>
+    </div>
+    <div class="section-title">Distribution preview</div>
+    <div class="progress-list" id="practice-preview"><div class="row">Click Preview to inspect the drawn allocation.</div></div>
+  </div>
+  <div class="dialog-actions">
+    <button type="button" class="btn" id="practice-preview-btn">Preview</button>
+    <button type="button" class="btn ghost" id="practice-cancel">Cancel</button>
+    <button type="button" class="btn primary" id="practice-start" disabled>Start session</button>
+  </div>
+</dialog>
+
+<!-- Session Finish / Grade Modal -->
+<dialog id="end-modal" class="dialog-wide">
+  <div class="dialog-head">
+    <h2 id="end-title">Session Complete</h2>
+    <p class="sub" id="end-sub">Choose cluster cleanup mode.</p>
+  </div>
+  <div class="dialog-body">
+    <div class="progress-list" id="end-summary"></div>
+    <div class="field" id="end-cleanup-field" style="margin-block-start:16px">
+      <span>Cluster cleanup</span>
+      <div class="choice-row">
+        <label class="choice"><input type="radio" name="end-reset" value="fast" checked> Fast cleanup (L1 · ~30s)</label>
+        <label class="choice"><input type="radio" name="end-reset" value="baseline"> Clean reset (L2 · ~2 min)</label>
+      </div>
+    </div>
+  </div>
+  <div class="dialog-actions">
+    <button type="button" class="btn ghost" id="end-cancel">Cancel</button>
+    <button type="button" class="btn primary" id="end-finish">Finish &amp; clean up</button>
+    <button type="button" class="btn" id="end-close" hidden>Close</button>
+  </div>
+</dialog>
+
+<!-- Shortcuts Cheat-Sheet Modal -->
+<dialog id="shortcuts-modal" class="dialog-narrow" closedby="any">
+  <div class="dialog-head">
+    <h2>Keyboard Shortcuts &amp; Exam Shell</h2>
+    <p class="sub">High-velocity bindings active across CKA Arena.</p>
+  </div>
+  <div class="dialog-body">
+    <div class="progress-list">
+      <div class="row"><kbd>⌘K</kbd> : Open Command Palette</div>
+      <div class="row"><kbd>⌘↵</kbd> : Run Check on active task</div>
+      <div class="row"><kbd>⌘⇧↵</kbd> : Advance to Next question</div>
+      <div class="row"><kbd>⌘B</kbd> : Toggle Zen Terminal (full width)</div>
+      <div class="row"><kbd>⌘\</kbd> : Hide / Show built-in terminal (Native mode)</div>
+      <div class="row"><kbd>⌘F</kbd> : Search terminal scrollback buffer</div>
+      <div class="row"><kbd>⌘L</kbd> : Clear active terminal screen</div>
+      <div class="row"><kbd>⌘+</kbd> / <kbd>⌘-</kbd> / <kbd>⌘0</kbd> : Terminal font zoom &amp; reset</div>
+      <div class="row"><kbd>Ctrl+Shift+C</kbd> / <kbd>V</kbd> : Copy selection / Paste in terminal</div>
+      <div class="row"><kbd>⌘1..5</kbd> : Switch Arena / Readiness / Studio / Settings / Study Codex</div>
+      <div class="row"><kbd>⌘/</kbd> : Toggle this reference</div>
+    </div>
+    <div class="section-title" style="margin-block-start:16px">Pre-configured Shell Profile</div>
+    <div class="progress-list">
+      <div class="row"><code>k</code> : <code>kubectl</code> alias + tab completion</div>
+      <div class="row"><code>$do</code> : <code>--dry-run=client -o yaml</code></div>
+      <div class="row"><code>$now</code> : <code>--force --grace-period=0</code></div>
+      <div class="row"><code>vim / vi</code> : <code>KUBE_EDITOR=vim</code>, 2-space YAML, syntax on, noswapfile, &lt;F2&gt; paste</div>
+    </div>
+  </div>
+  <div class="dialog-actions">
+    <button type="button" class="btn primary" id="shortcuts-close">Close</button>
+  </div>
+</dialog>
+
+<!-- Speed Recall Blitz Modal (Study Codex) -->
+<dialog id="study-drill-modal" closedby="any">
+  <div class="dialog-head">
+    <div class="study-drill-head">
+      <h2 id="study-drill-title">Speed Recall Blitz</h2>
+      <span class="badge accent" id="study-drill-counter">0 / 10</span>
+    </div>
+    <p class="sub" id="study-drill-sub">10 high-yield CKA Boss Check scenarios across exam domains.</p>
+  </div>
+  <div class="dialog-body" id="study-drill-body">
+    <div class="row">Loading deck…</div>
+  </div>
+  <div class="dialog-actions" id="study-drill-actions">
+    <button type="button" class="btn ghost" id="study-drill-close">Close</button>
+  </div>
+</dialog>
+
+<!-- Confirmation Modal -->
+<dialog id="confirm-modal" class="dialog-narrow" closedby="any">
+  <div class="dialog-head">
+    <h2 id="confirm-title">Confirm</h2>
+    <p class="sub" id="confirm-text"></p>
+  </div>
+  <div class="dialog-actions">
+    <button type="button" class="btn ghost" id="confirm-no">Cancel</button>
+    <button type="button" class="btn danger" id="confirm-yes">Confirm</button>
+  </div>
+</dialog>
+
+<div class="toast" id="toast"></div>
+
+<script src="/static/vendor/xterm/xterm.js"></script>
+<script src="/static/vendor/xterm/addon-fit.js"></script>
+<script type="module" src="/static/js/app.js?v=3.7"></script>
+</body>
+</html>

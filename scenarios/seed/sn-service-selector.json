@@ -1,0 +1,107 @@
+{
+  "schema_version": "1.2",
+  "id": "seed-sn-service-selector",
+  "title": "Fix a Service Selector",
+  "domain": "Services & Networking",
+  "subtopics": [
+    "Service",
+    "selector",
+    "Endpoints"
+  ],
+  "difficulty": "exam_standard",
+  "weight": 4,
+  "estimated_minutes": 4,
+  "prompt": "Service `web-svc` in namespace `cka-sn-selector` has no Endpoints: its selector does not match the Pods of Deployment `web` (labels `app=web`).\n\nPerform the following tasks:\n1. Fix Service `web-svc` so it routes traffic to the Pods of Deployment `web`.\n2. Do not modify the Deployment or its Pod labels.",
+  "copy_tokens": [
+    "web-svc",
+    "cka-sn-selector",
+    "web",
+    "app=web"
+  ],
+  "docs_links": [
+    {
+      "label": "Services",
+      "url": "https://kubernetes.io/docs/concepts/services-networking/service/"
+    }
+  ],
+  "setup": {
+    "namespaces": [
+      "cka-sn-selector"
+    ],
+    "manifests": [
+      "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n  namespace: cka-sn-selector\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: web\n  template:\n    metadata:\n      labels:\n        app: web\n    spec:\n      containers:\n      - name: web\n        image: nginx:1.27-alpine\n        ports:\n        - containerPort: 80\n",
+      "apiVersion: v1\nkind: Service\nmetadata:\n  name: web-svc\n  namespace: cka-sn-selector\nspec:\n  selector:\n    app: webapp\n  ports:\n  - port: 80\n    targetPort: 80\n"
+    ]
+  },
+  "checks": [
+    {
+      "id": "chk-service",
+      "description": "Service `web-svc` exists",
+      "type": "kubectl_resource_exists",
+      "params": {
+        "kind": "service",
+        "name": "web-svc",
+        "namespace": "cka-sn-selector"
+      },
+      "failure_hint": "The Service exists \u2014 fix its selector."
+    },
+    {
+      "id": "chk-endpoints",
+      "description": "Service `web-svc` has at least 1 endpoint",
+      "type": "kubectl_jsonpath",
+      "params": {
+        "kind": "endpoints",
+        "name": "web-svc",
+        "namespace": "cka-sn-selector",
+        "jsonpath": "{.subsets[*].addresses[*].ip}",
+        "operator": "len_gte",
+        "expected": 1
+      },
+      "failure_hint": "No endpoints: the selector does not match the Pod labels app=web."
+    },
+    {
+      "id": "chk-http",
+      "description": "HTTP through `web-svc` returns 200",
+      "type": "pod_exec_exit_zero",
+      "params": {
+        "namespace": "cka-sn-selector",
+        "ephemeral_probe": true,
+        "command": [
+          "curl",
+          "-sS",
+          "--max-time",
+          "5",
+          "-o",
+          "/dev/null",
+          "-w",
+          "%{http_code}",
+          "http://web-svc.cka-sn-selector.svc.cluster.local"
+        ],
+        "stdout_contains": "200"
+      },
+      "failure_hint": "Traffic does not reach the Pods \u2014 check the Service selector."
+    }
+  ],
+  "solution": {
+    "manifests": [],
+    "commands": [
+      "kubectl -n cka-sn-selector patch service web-svc --type=merge -p='{\"spec\":{\"selector\":{\"app\":\"web\"}}}'"
+    ]
+  },
+  "cleanup": {
+    "namespaces": [
+      "cka-sn-selector"
+    ]
+  },
+  "reference_solution": "Fix the Service selector.\n```bash\nkubectl -n cka-sn-selector patch service web-svc --type=merge -p='{\"spec\":{\"selector\":{\"app\":\"web\"}}}'\n```",
+  "destructive": false,
+  "archetype_id": "sn-service-selector",
+  "context_command": "kubectl config use-context cka",
+  "hints": [
+    "Check `k -n cka-sn-selector get endpoints web-svc` and compare with pod labels via `k -n cka-sn-selector get pods --show-labels`.",
+    "Align `spec.selector` on Service `web-svc` so it matches the Pod template labels."
+  ],
+  "fast_solution_commands": [
+    "k -n cka-sn-selector get pods,svc --show-labels"
+  ]
+}

@@ -1,0 +1,199 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 900" font-family="Inter, -apple-system, 'Segoe UI', sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#05070D"/>
+      <stop offset="0.6" stop-color="#0B0E14"/>
+    </linearGradient>
+    <radialGradient id="aurora-blue" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#3B82F6" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#3B82F6" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="aurora-green" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#34D399" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#34D399" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="glass-fill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#161C29" stop-opacity="0.60"/>
+      <stop offset="1" stop-color="#101521" stop-opacity="0.66"/>
+    </linearGradient>
+    <linearGradient id="clear-grad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#60A5FA" stop-opacity="0.20"/>
+      <stop offset="1" stop-color="#3B82F6" stop-opacity="0.08"/>
+    </linearGradient>
+    <linearGradient id="spec" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.20"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.04"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.20"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000000" flood-opacity="0.37"/>
+    </filter>
+    <filter id="glow-blue" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="9" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- canvas + auroras estáticas (o que o vidro refrata) -->
+  <rect width="1440" height="900" fill="url(#bg)"/>
+  <ellipse cx="320" cy="180" rx="430" ry="270" fill="url(#aurora-blue)"/>
+  <ellipse cx="1180" cy="760" rx="470" ry="310" fill="url(#aurora-green)"/>
+
+  <!-- ══ HEADER · glass-1 ══ -->
+  <g filter="url(#shadow)">
+    <rect x="20" y="20" width="1400" height="56" rx="16" fill="url(#glass-fill)" stroke="#FFFFFF" stroke-opacity="0.10"/>
+  </g>
+  <path d="M 36 21 H 1404" stroke="url(#spec)" stroke-width="1" opacity="0.8"/>
+  <text x="44" y="54" font-size="15" font-weight="700" letter-spacing="2" fill="#E6EDF3">◈ CKA ARENA</text>
+
+  <!-- Q-pills -->
+  <g font-family="'JetBrains Mono', Menlo, monospace" font-size="12" text-anchor="middle">
+    <rect x="210" y="34" width="58" height="28" rx="14" fill="#34D399" fill-opacity="0.10" stroke="#34D399" stroke-opacity="0.40"/>
+    <text x="239" y="52" fill="#34D399">✓ Q1</text>
+    <rect x="276" y="34" width="58" height="28" rx="14" fill="#60A5FA" fill-opacity="0.16" stroke="#60A5FA" stroke-opacity="0.55"/>
+    <text x="305" y="52" fill="#60A5FA">● Q2</text>
+    <rect x="342" y="34" width="58" height="28" rx="14" fill="#FFFFFF" fill-opacity="0.04" stroke="#FFFFFF" stroke-opacity="0.10"/>
+    <text x="371" y="52" fill="#5A6778">🔒 Q3</text>
+  </g>
+
+  <!-- Power Pill · glass-clear (o único Clear do header) -->
+  <g filter="url(#glow-blue)">
+    <rect x="560" y="32" width="172" height="32" rx="16" fill="url(#clear-grad)" stroke="#60A5FA" stroke-opacity="0.38"/>
+  </g>
+  <text x="580" y="53" font-family="'JetBrains Mono', Menlo, monospace" font-size="12.5" fill="#E6EDF3">● Ready 3/3</text>
+  <text x="700" y="53" font-family="'JetBrains Mono', Menlo, monospace" font-size="12.5" fill="#8B98AC">⏻</text>
+
+  <!-- ações do header · ghost glass -->
+  <g font-size="12.5" text-anchor="middle">
+    <rect x="1150" y="33" width="86" height="30" rx="15" fill="#FFFFFF" fill-opacity="0.05" stroke="#FFFFFF" stroke-opacity="0.12"/>
+    <text x="1193" y="52" fill="#C9D4E3">+ Studio</text>
+    <rect x="1244" y="33" width="94" height="30" rx="15" fill="#FFFFFF" fill-opacity="0.05" stroke="#FFFFFF" stroke-opacity="0.12"/>
+    <text x="1291" y="52" fill="#C9D4E3">▶ Practice</text>
+    <rect x="1346" y="33" width="34" height="30" rx="15" fill="#FFFFFF" fill-opacity="0.05" stroke="#FFFFFF" stroke-opacity="0.12"/>
+    <text x="1363" y="52" fill="#C9D4E3">⚙</text>
+  </g>
+
+  <!-- ══ COLUNA ESQUERDA · casca glass-1 + conteúdo opaco ══ -->
+  <g filter="url(#shadow)">
+    <rect x="20" y="92" width="612" height="760" rx="16" fill="url(#glass-fill)" stroke="#FFFFFF" stroke-opacity="0.10"/>
+  </g>
+  <path d="M 36 93 H 616" stroke="url(#spec)" stroke-width="1" opacity="0.7"/>
+  <rect x="32" y="104" width="588" height="736" rx="10" fill="#121722" fill-opacity="0.94"/>
+
+  <!-- badge + timer -->
+  <text x="52" y="136" font-family="'JetBrains Mono', Menlo, monospace" font-size="11" letter-spacing="1.5" fill="#8B98AC">TROUBLESHOOTING · 30% · HARDCORE</text>
+  <text x="612" y="136" font-family="'JetBrains Mono', Menlo, monospace" font-size="12" fill="#E6EDF3" text-anchor="end">⏱ 04:32 / 07:00</text>
+  <path d="M 52 150 H 600" stroke="#FFFFFF" stroke-opacity="0.07"/>
+
+  <!-- contexto + copy-pills -->
+  <text x="52" y="178" font-size="11" letter-spacing="1.5" fill="#5A6778">REQUIRED CONTEXT</text>
+  <g font-family="'JetBrains Mono', Menlo, monospace" font-size="11.5">
+    <rect x="52" y="190" width="318" height="28" rx="8" fill="#0B0E14" stroke="#FFFFFF" stroke-opacity="0.08"/>
+    <text x="66" y="208" fill="#C9D4E3">$ kubectl config use-context cka</text>
+    <rect x="612" y="190" width="62" height="28" rx="8" fill="#FFFFFF" fill-opacity="0.05" stroke="#FFFFFF" stroke-opacity="0.10"/>
+    <text x="592" y="208" fill="#8B98AC" text-anchor="end">copy</text>
+    <rect x="52" y="224" width="318" height="28" rx="8" fill="#0B0E14" stroke="#FFFFFF" stroke-opacity="0.08"/>
+    <text x="66" y="242" fill="#C9D4E3">$ ssh cka-node01</text>
+    <rect x="612" y="224" width="62" height="28" rx="8" fill="#FFFFFF" fill-opacity="0.05" stroke="#FFFFFF" stroke-opacity="0.10"/>
+    <text x="592" y="242" fill="#8B98AC" text-anchor="end">copy</text>
+  </g>
+
+  <!-- enunciado -->
+  <text x="52" y="292" font-size="15" font-weight="600" fill="#E6EDF3">Task</text>
+  <g font-size="13" fill="#C9D4E3">
+    <text x="52" y="318">A Deployment `web-api` in namespace `prod-checkout`</text>
+    <text x="52" y="340">is running 1/3 replicas after recent node</text>
+    <text x="52" y="362">maintenance on `node01`.</text>
+    <text x="52" y="396" fill="#8B98AC" font-weight="600">Perform the following tasks</text>
+    <text x="52" y="420">1. Restore the `kubelet` on `node01` until Ready.</text>
+    <text x="52" y="442">2. Scale `web-api` to `3` replicas.</text>
+    <text x="52" y="464">3. Pin all pods to `node01` via `nodeSelector`.</text>
+  </g>
+  <text x="52" y="498" font-size="12" fill="#60A5FA">↗ Node Troubleshooting　↗ Assigning Pods to Nodes</text>
+
+  <!-- resultado do check -->
+  <path d="M 52 516 H 600" stroke="#FFFFFF" stroke-opacity="0.07"/>
+  <text x="52" y="544" font-size="11" letter-spacing="1.5" fill="#5A6778">CHECK RESULTS</text>
+  <g font-size="13">
+    <text x="52" y="572" fill="#34D399">✓ PASS</text>
+    <text x="120" y="572" fill="#C9D4E3">Node `node01` reports Ready=True</text>
+    <text x="52" y="604" fill="#FB7185">✗ FAIL</text>
+    <text x="120" y="604" fill="#C9D4E3">`web-api` has 1/3 replicas ready</text>
+    <text x="120" y="624" font-size="12" fill="#8B98AC">↳ Expected 3 ready; current: 1.</text>
+    <text x="120" y="656" fill="#C9D4E3">Pods missing nodeSelector for `node01`</text>
+    <text x="120" y="676" font-size="12" fill="#8B98AC">↳ `spec.template.spec.nodeSelector` missing.</text>
+  </g>
+
+  <!-- barra de ação da questão -->
+  <g text-anchor="middle" font-size="12.5">
+    <rect x="52" y="780" width="40" height="32" rx="10" fill="#FFFFFF" fill-opacity="0.05" stroke="#FFFFFF" stroke-opacity="0.12"/>
+    <text x="72" y="800">↻</text>
+    <rect x="100" y="780" width="40" height="32" rx="10" fill="#FFFFFF" fill-opacity="0.05" stroke="#FFFFFF" stroke-opacity="0.12"/>
+    <text x="120" y="800">🏳</text>
+    <!-- Check · glass-clear (o único Clear da coluna) -->
+    <g filter="url(#glow-blue)">
+      <rect x="356" y="778" width="176" height="36" rx="18" fill="url(#clear-grad)" stroke="#60A5FA" stroke-opacity="0.40"/>
+    </g>
+    <text x="444" y="801" fill="#E6EDF3" font-weight="600">✓ Check ⌘↵</text>
+    <rect x="544" y="780" width="120" height="32" rx="16" fill="#FFFFFF" fill-opacity="0.04" stroke="#FFFFFF" stroke-opacity="0.10"/>
+    <text x="604" y="800" fill="#5A6778">🔒 Next →</text>
+  </g>
+
+  <!-- ══ COLUNA DIREITA · casca glass-1 + tela de terminal opaca ══ -->
+  <g filter="url(#shadow)">
+    <rect x="652" y="92" width="768" height="760" rx="16" fill="url(#glass-fill)" stroke="#FFFFFF" stroke-opacity="0.10"/>
+  </g>
+  <path d="M 668 93 H 804" stroke="url(#spec)" stroke-width="1" opacity="0.7"/>
+
+  <!-- abas do terminal -->
+  <g font-family="'JetBrains Mono', Menlo, monospace" font-size="12" text-anchor="middle">
+    <rect x="668" y="106" width="64" height="30" rx="10" fill="#60A5FA" fill-opacity="0.16" stroke="#60A5FA" stroke-opacity="0.50"/>
+    <text x="700" y="125" fill="#60A5FA">mac</text>
+    <rect x="740" y="106" width="106" height="30" rx="10" fill="#FFFFFF" fill-opacity="0.04" stroke="#FFFFFF" stroke-opacity="0.10"/>
+    <text x="793" y="125" fill="#8B98AC">controlplane</text>
+    <rect x="854" y="106" width="82" height="30" rx="10" fill="#FFFFFF" fill-opacity="0.04" stroke="#FFFFFF" stroke-opacity="0.10"/>
+    <text x="895" y="125" fill="#8B98AC">node01</text>
+    <rect x="944" y="106" width="82" height="30" rx="10" fill="#FFFFFF" fill-opacity="0.04" stroke="#FFFFFF" stroke-opacity="0.10"/>
+    <text x="985" y="125" fill="#8B98AC">node02</text>
+    <rect x="1034" y="106" width="36" height="30" rx="10" fill="#FFFFFF" fill-opacity="0.04" stroke="#FFFFFF" stroke-opacity="0.10"/>
+    <text x="1052" y="125" fill="#C9D4E3">+</text>
+  </g>
+
+  <!-- tela do terminal · opaca e plana, SEM vidro -->
+  <rect x="668" y="148" width="736" height="616" rx="10" fill="#0B0E14" stroke="#FFFFFF" stroke-opacity="0.06"/>
+  <g font-family="'JetBrains Mono', Menlo, monospace" font-size="12.5">
+    <text x="688" y="184" fill="#8B98AC">$ <tspan fill="#E6EDF3">kubectl config use-context cka</tspan></text>
+    <text x="688" y="208" fill="#5A6778">Switched to context "cka".</text>
+    <text x="688" y="240" fill="#8B98AC">$ <tspan fill="#E6EDF3">kubectl -n prod-checkout get deploy web-api</tspan></text>
+    <text x="688" y="264" fill="#C9D4E3">NAME      READY   UP-TO-DATE   AVAILABLE</text>
+    <text x="688" y="288" fill="#FB7185">web-api   1/3     1            1</text>
+    <text x="688" y="320" fill="#8B98AC">$ <tspan fill="#E6EDF3">ssh cka-node01</tspan></text>
+    <text x="688" y="344" fill="#5A6778">Welcome to Ubuntu 22.04.5 LTS (arm64)</text>
+    <text x="688" y="376" fill="#8B98AC">$ <tspan fill="#E6EDF3">systemctl status kubelet</tspan></text>
+    <text x="688" y="400" fill="#FB7185">● kubelet.service - kubelet: The Kubernetes Node Agent</text>
+    <text x="688" y="424" fill="#5A6778">   Loaded: loaded (/lib/systemd/system/kubelet.service; enabled)</text>
+    <text x="688" y="448" fill="#5A6778">   Active: <tspan fill="#FB7185">failed</tspan> (Result: exit-code)</text>
+    <text x="688" y="488" fill="#8B98AC">$</text>
+    <rect x="700" y="477" width="8" height="15" fill="#60A5FA"/>
+  </g>
+
+  <!-- barra de ação do terminal -->
+  <g text-anchor="middle" font-family="'JetBrains Mono', Menlo, monospace" font-size="12">
+    <rect x="668" y="778" width="96" height="32" rx="10" fill="#FFFFFF" fill-opacity="0.05" stroke="#FFFFFF" stroke-opacity="0.12"/>
+    <text x="716" y="798" fill="#8B98AC">⌥T New Tab</text>
+    <rect x="772" y="778" width="96" height="32" rx="10" fill="#FFFFFF" fill-opacity="0.05" stroke="#FFFFFF" stroke-opacity="0.12"/>
+    <text x="820" y="798" fill="#8B98AC">⌘K Clear</text>
+    <g filter="url(#glow-blue)">
+      <rect x="1128" y="776" width="176" height="36" rx="18" fill="url(#clear-grad)" stroke="#60A5FA" stroke-opacity="0.40"/>
+    </g>
+    <text x="1216" y="799" fill="#E6EDF3" font-weight="600">✓ Check ⌘↵</text>
+    <text x="1340" y="799" fill="#8B98AC">📋</text>
+  </g>
+
+  <!-- ══ STATUS STRIP · glass-1 persistente ══ -->
+  <g filter="url(#shadow)">
+    <rect x="20" y="864" width="1400" height="26" rx="13" fill="url(#glass-fill)" stroke="#FFFFFF" stroke-opacity="0.08"/>
+  </g>
+  <text x="44" y="881" font-family="'JetBrains Mono', Menlo, monospace" font-size="11" fill="#8B98AC">session: Mock Exam 15 · Q2/15 · ⏱ 12:34 elapsed　·　cluster <tspan fill="#34D399">● Ready 3/3</tspan>　·　bank: 42 published</text>
+  <text x="1396" y="881" font-family="'JetBrains Mono', Menlo, monospace" font-size="11" fill="#5A6778" text-anchor="end">127.0.0.1:8765</text>
+</svg>

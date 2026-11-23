@@ -1,0 +1,118 @@
+{
+  "schema_version": "1.2",
+  "id": "seed-ca-rbac-pod-reader",
+  "title": "Grant Least-Privilege Pod Access",
+  "domain": "Cluster Architecture, Installation & Configuration",
+  "subtopics": [
+    "RBAC",
+    "ServiceAccount",
+    "Role",
+    "RoleBinding"
+  ],
+  "difficulty": "exam_standard",
+  "weight": 5,
+  "estimated_minutes": 4,
+  "context_command": "kubectl config use-context cka",
+  "prompt": "The ServiceAccount `deployer` exists in namespace `cka-rbac`.\n\nPerform the following tasks:\n1. Grant `deployer` permission to only `get` and `list` Pods in namespace `cka-rbac`.\n2. Do not grant access to any other resource or action.",
+  "copy_tokens": [
+    "deployer",
+    "cka-rbac",
+    "get",
+    "list",
+    "Pods",
+    "ServiceAccount"
+  ],
+  "docs_links": [
+    {
+      "label": "RBAC Authorization",
+      "url": "https://kubernetes.io/docs/reference/access-authn-authz/rbac/"
+    }
+  ],
+  "setup": {
+    "namespaces": [
+      "cka-rbac"
+    ],
+    "manifests": [
+      "apiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: deployer\n  namespace: cka-rbac\n"
+    ],
+    "node_commands": []
+  },
+  "checks": [
+    {
+      "id": "chk-sa-exists",
+      "description": "ServiceAccount `deployer` exists in `cka-rbac`",
+      "type": "kubectl_resource_exists",
+      "params": {
+        "kind": "serviceaccount",
+        "name": "deployer",
+        "namespace": "cka-rbac"
+      },
+      "failure_hint": "The ServiceAccount is provided by the scenario; do not delete it."
+    },
+    {
+      "id": "chk-can-get",
+      "description": "`deployer` can `get` Pods in `cka-rbac`",
+      "type": "kubectl_auth_can_i",
+      "params": {
+        "verb": "get",
+        "resource": "pods",
+        "service_account": "deployer",
+        "namespace": "cka-rbac",
+        "target_namespace": "cka-rbac",
+        "expected_allowed": true
+      },
+      "failure_hint": "Create a Role with `get` on `pods` and bind it to the ServiceAccount with a RoleBinding."
+    },
+    {
+      "id": "chk-can-list",
+      "description": "`deployer` can `list` Pods in `cka-rbac`",
+      "type": "kubectl_auth_can_i",
+      "params": {
+        "verb": "list",
+        "resource": "pods",
+        "service_account": "deployer",
+        "namespace": "cka-rbac",
+        "target_namespace": "cka-rbac",
+        "expected_allowed": true
+      },
+      "failure_hint": "The Role must include the `list` verb on `pods`."
+    },
+    {
+      "id": "chk-cannot-delete",
+      "description": "`deployer` cannot `delete` Pods in `cka-rbac`",
+      "type": "kubectl_auth_can_i",
+      "params": {
+        "verb": "delete",
+        "resource": "pods",
+        "service_account": "deployer",
+        "namespace": "cka-rbac",
+        "target_namespace": "cka-rbac",
+        "expected_allowed": false
+      },
+      "failure_hint": "Grant only `get` and `list`; do not add `delete` to the Role."
+    }
+  ],
+  "solution": {
+    "manifests": [],
+    "commands": [
+      "kubectl -n cka-rbac create role pod-reader --verb=get,list --resource=pods",
+      "kubectl -n cka-rbac create rolebinding deployer-pod-reader --role=pod-reader --serviceaccount=cka-rbac:deployer"
+    ]
+  },
+  "cleanup": {
+    "namespaces": [
+      "cka-rbac"
+    ]
+  },
+  "reference_solution": "Create the Role and bind it to the ServiceAccount.\n```bash\nkubectl -n cka-rbac create role pod-reader --verb=get,list --resource=pods\nkubectl -n cka-rbac create rolebinding deployer-pod-reader --role=pod-reader --serviceaccount=cka-rbac:deployer\n```",
+  "destructive": false,
+  "archetype_id": "ca-rbac-least-priv",
+  "hints": [
+    "Verify existing ServiceAccount and permissions with `k auth can-i get pods --as=system:serviceaccount:cka-rbac:deployer -n cka-rbac`.",
+    "Create a least-privilege Role for resource `pods` with verbs `get,list` and bind it via RoleBinding to `cka-rbac:deployer`."
+  ],
+  "fast_solution_commands": [
+    "k -n cka-rbac create role pod-reader --verb=get,list --resource=pods",
+    "k -n cka-rbac create rolebinding deployer-pod-reader --role=pod-reader --serviceaccount=cka-rbac:deployer"
+  ]
+}

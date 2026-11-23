@@ -1,0 +1,119 @@
+{
+  "schema_version": "1.2",
+  "id": "seed-sn-gateway-httproute",
+  "title": "Publish a Service Through Gateway API",
+  "domain": "Services & Networking",
+  "subtopics": [
+    "Gateway API",
+    "HTTPRoute",
+    "GatewayClass"
+  ],
+  "difficulty": "killer_hardcore",
+  "weight": 7,
+  "estimated_minutes": 5,
+  "prompt": "In namespace `cka-gw` a Gateway named `edge` (GatewayClass `eg`, HTTP listener on port `80`) fronts a Deployment `web` exposed by Service `web-svc` on port `80`.\n\nPerform the following tasks:\n1. Create an HTTPRoute named `web-route` in namespace `cka-gw` attached to Gateway `edge`.\n2. Route hostname `web.example.com` on path `/` to Service `web-svc` on port `80`.\n3. The route must be accepted by the Gateway controller.",
+  "copy_tokens": [
+    "cka-gw",
+    "edge",
+    "web-route",
+    "web.example.com",
+    "/",
+    "web-svc",
+    "80"
+  ],
+  "docs_links": [
+    {
+      "label": "Gateway API",
+      "url": "https://gateway-api.sigs.k8s.io/"
+    }
+  ],
+  "setup": {
+    "namespaces": [
+      "cka-gw"
+    ],
+    "manifests": [
+      "apiVersion: gateway.networking.k8s.io/v1\nkind: GatewayClass\nmetadata:\n  name: eg\nspec:\n  controllerName: gateway.envoyproxy.io/gatewayclass-controller\n",
+      "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n  namespace: cka-gw\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: web\n  template:\n    metadata:\n      labels:\n        app: web\n    spec:\n      containers:\n      - name: web\n        image: nginx:1.27-alpine\n        ports:\n        - containerPort: 80\n",
+      "apiVersion: v1\nkind: Service\nmetadata:\n  name: web-svc\n  namespace: cka-gw\nspec:\n  selector:\n    app: web\n  ports:\n  - port: 80\n    targetPort: 80\n",
+      "apiVersion: gateway.networking.k8s.io/v1\nkind: Gateway\nmetadata:\n  name: edge\n  namespace: cka-gw\nspec:\n  gatewayClassName: eg\n  listeners:\n  - name: http\n    protocol: HTTP\n    port: 80\n    allowedRoutes:\n      namespaces:\n        from: Same\n"
+    ]
+  },
+  "checks": [
+    {
+      "id": "chk-route-exists",
+      "description": "HTTPRoute `web-route` exists in `cka-gw`",
+      "type": "kubectl_resource_exists",
+      "params": {
+        "kind": "httproute",
+        "name": "web-route",
+        "namespace": "cka-gw"
+      },
+      "failure_hint": "Create the HTTPRoute attached to Gateway edge."
+    },
+    {
+      "id": "chk-hostname",
+      "description": "Route hostname is `web.example.com`",
+      "type": "kubectl_jsonpath",
+      "params": {
+        "kind": "httproute",
+        "name": "web-route",
+        "namespace": "cka-gw",
+        "jsonpath": "{.spec.hostnames[0]}",
+        "operator": "equals",
+        "expected": "web.example.com"
+      },
+      "failure_hint": "Set hostnames to [web.example.com]."
+    },
+    {
+      "id": "chk-backend",
+      "description": "Route backend is Service `web-svc` on port 80",
+      "type": "kubectl_jsonpath",
+      "params": {
+        "kind": "httproute",
+        "name": "web-route",
+        "namespace": "cka-gw",
+        "jsonpath": "{.spec.rules[0].backendRefs[0].name}",
+        "operator": "equals",
+        "expected": "web-svc"
+      },
+      "failure_hint": "Point the rule backendRef at web-svc port 80."
+    },
+    {
+      "id": "chk-accepted",
+      "description": "The Gateway controller accepts the route",
+      "type": "kubectl_jsonpath",
+      "params": {
+        "kind": "httproute",
+        "name": "web-route",
+        "namespace": "cka-gw",
+        "jsonpath": "{.status.parents[0].conditions[?(@.type==\"Accepted\")].status}",
+        "operator": "equals",
+        "expected": "True"
+      },
+      "failure_hint": "The route must attach to Gateway edge and be accepted (status Accepted=True)."
+    }
+  ],
+  "solution": {
+    "manifests": [
+      "apiVersion: gateway.networking.k8s.io/v1\nkind: HTTPRoute\nmetadata:\n  name: web-route\n  namespace: cka-gw\nspec:\n  parentRefs:\n  - name: edge\n  hostnames:\n  - web.example.com\n  rules:\n  - matches:\n    - path:\n        type: PathPrefix\n        value: /\n    backendRefs:\n    - name: web-svc\n      port: 80\n"
+    ],
+    "commands": []
+  },
+  "cleanup": {
+    "namespaces": [
+      "cka-gw"
+    ]
+  },
+  "reference_solution": "Create the HTTPRoute.\n```yaml\napiVersion: gateway.networking.k8s.io/v1\nkind: HTTPRoute\nmetadata: {name: web-route, namespace: cka-gw}\nspec:\n  parentRefs: [{name: edge}]\n  hostnames: [\"web.example.com\"]\n  rules:\n  - matches: [{path: {type: PathPrefix, value: /}}]\n    backendRefs: [{name: web-svc, port: 80}]\n```",
+  "destructive": false,
+  "archetype_id": "sn-gateway-httproute",
+  "context_command": "kubectl config use-context cka",
+  "hints": [
+    "List existing Gateways and GatewayClasses with `k -n cka-gw get gateway` and check Service ports with `k -n cka-gw get svc`.",
+    "Create an HTTPRoute in `cka-gw` referencing the Gateway in `parentRefs` and backend Service `web-svc` on port 80."
+  ],
+  "fast_solution_commands": [
+    "k -n cka-gw get gateway,svc",
+    "k apply -f route.yaml"
+  ]
+}

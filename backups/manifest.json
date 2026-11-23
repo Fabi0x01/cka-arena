@@ -1,0 +1,17 @@
+{
+  "created_at_utc": "2026-11-23T14:25:17Z",
+  "db_file": "cka_arena_backup.db",
+  "size_bytes": 753664,
+  "sha256": "8fd73b47080c7fa98451770191abfb5613b941542084c84da56c573f03b6da11",
+  "ai_keys_included": false,
+  "counts": {
+    "published_questions": 58,
+    "total_bank_questions": 78,
+    "study_progress": 0,
+    "study_activity": 0,
+    "archetype_mastery": 15,
+    "sessions": 10,
+    "session_items": 66,
+    "check_runs": 37
+  }
+}
