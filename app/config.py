@@ -41,9 +41,22 @@ KUBECTL_CONTEXTS = ("cka", "cka-ops", "cka-edge")
 VM_NAMES = ("controlplane", "node01", "node02")
 NODE_ALIAS = {name: f"cka-{name}" for name in VM_NAMES}
 
+def _default_bridge_prefix() -> str:
+    explicit = os.environ.get("CKA_BRIDGE_PREFIX", "").strip()
+    if explicit:
+        return explicit
+    try:
+        stored = (CKA_DIR / "bridge_prefix").read_text().strip()
+        if stored:
+            return stored
+    except OSError:
+        pass
+    return "192.168.1."
+
+
 # SSH
 LAB_PASSWORD = os.environ.get("CKA_LAB_PASSWORD", "ubuntu")
-BRIDGE_PREFIX = os.environ.get("CKA_BRIDGE_PREFIX", "192.168.1.")
+BRIDGE_PREFIX = _default_bridge_prefix()
 SSH_CONNECT_TIMEOUT = 4
 SSH_EXEC_TIMEOUT = 20
 SSH_KEY_COMMENT = "cka-arena"

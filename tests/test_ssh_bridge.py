@@ -48,7 +48,8 @@ def test_rewrite_kubeconfig_raises_without_server_line() -> None:
         rewrite_kubeconfig_server("apiVersion: v1\n", "192.168.1.123")
 
 
-def test_bridge_ips_excludes_nat_and_overlay() -> None:
+def test_bridge_ips_excludes_nat_and_overlay(monkeypatch) -> None:
+    monkeypatch.setattr(config, "BRIDGE_PREFIX", "192.168.1.")
     assert bridge_ips(["192.168.252.3", "192.168.1.123", "10.38.0.1"]) == ["192.168.1.123"]
     assert bridge_ips(["192.168.252.4"]) == []
 

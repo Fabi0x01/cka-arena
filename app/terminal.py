@@ -10,6 +10,7 @@ import re
 import shutil
 import signal
 import struct
+import sys
 import termios
 import time
 import uuid
@@ -92,7 +93,7 @@ fi
 """
 
 _ZSHRC_TEXT = r"""# CKA Arena Exam Shell (.zshrc) — clean PSI exam environment
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin${PATH:+:$PATH}"
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin${PATH:+:$PATH}"
 bindkey -e
 setopt interactive_comments prompt_subst
 HISTFILE="$CKA_ARENA_WORKDIR/.zsh_history"
@@ -108,6 +109,21 @@ PROMPT='%F{green}candidate@cka-arena%f %F{cyan}[$(_cka_kctx)]%f %F{blue}%1~%f $ 
 [ -f "$CKA_EXAM_PROFILE" ] && source "$CKA_EXAM_PROFILE" 2>/dev/null || true
 """
 
+_BASHRC_TEXT = r"""# CKA Arena Exam Shell (.bashrc) — clean PSI exam environment (WSL2 / Linux)
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin${PATH:+:$PATH}"
+HISTFILE="$CKA_ARENA_WORKDIR/.bash_history"
+HISTSIZE=2000
+SAVEHIST=2000
+
+_cka_kctx() {
+  [ -r "${KUBECONFIG:-}" ] || { printf 'cka'; return; }
+  awk '/^current-context:/{print $2; found=1; exit} END{if(!found) print "cka"}' "$KUBECONFIG" 2>/dev/null
+}
+
+PS1='\[\033[32m\]candidate@cka-arena\[\033[0m\] \[\033[36m\][$(_cka_kctx)]\[\033[0m\] \[\033[34m\]\W\[\033[0m\] $ '
+[ -f "$CKA_EXAM_PROFILE" ] && source "$CKA_EXAM_PROFILE" 2>/dev/null || true
+"""
+
 
 def _resolve_exam_editor() -> str:
     """Prefer vim over vi so benign search misses do not exit 1 on kubectl edit."""
@@ -117,13 +133,30 @@ def _resolve_exam_editor() -> str:
     return shutil.which("nano") or "vi"
 
 
+def _resolve_host_shell(env: dict[str, str]) -> str:
+    """Pick a valid interactive host shell across macOS (zsh) and Linux/WSL2 (bash/zsh)."""
+    preferred = env.get("SHELL", "")
+    if preferred and os.path.isabs(preferred) and os.access(preferred, os.X_OK):
+        return preferred
+    order = ("zsh", "bash", "sh") if sys.platform == "darwin" else ("bash", "zsh", "sh")
+    for candidate in order:
+        found = shutil.which(candidate)
+        if found and os.access(found, os.X_OK):
+            return found
+    for fallback in ("/bin/zsh", "/bin/bash", "/bin/sh"):
+        if os.access(fallback, os.X_OK):
+            return fallback
+    return "/bin/sh"
+
+
 def write_exam_shell_files(workdir: Path) -> None:
-    """Create isolated .vimrc, .cka_env.sh, and ZDOTDIR .zshrc inside scratch workdir."""
+    """Create isolated .vimrc, .cka_env.sh, .zshrc, and .bashrc inside scratch workdir."""
     workdir.mkdir(parents=True, exist_ok=True)
     (workdir / "tmp").mkdir(parents=True, exist_ok=True)
     (workdir / ".vimrc").write_text(EXAM_VIMRC_TEXT)
     (workdir / ".cka_env.sh").write_text(_CKA_ENV_SH)
     (workdir / ".zshrc").write_text(_ZSHRC_TEXT)
+    (workdir / ".bashrc").write_text(_BASHRC_TEXT)
 
 
 def terminal_env(workdir: Path | None = None) -> dict[str, str]:
@@ -253,8 +286,11 @@ class TerminalSession:
                     os.execvpe(cmd[0], cmd, env)
                 if self.workdir is not None:
                     os.chdir(self.workdir)
-                shell = env.get("SHELL", "/bin/zsh")
-                os.execvpe(shell, [shell, "-l"], env)
+                shell = _resolve_host_shell(env)
+                if os.path.basename(shell) == "bash" and self.workdir is not None:
+                    os.execvpe(shell, [shell, "--rcfile", str(self.workdir / ".bashrc"), "-i"], env)
+                else:
+                    os.execvpe(shell, [shell, "-l"], env)
             except Exception:
                 os._exit(127)
         os.close(slave_fd)

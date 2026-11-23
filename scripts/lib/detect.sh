@@ -1,16 +1,35 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2034  # globals consumed by setup.sh via sourcing
-# detect.sh — OS/distro/arch/env detection (English only)
+# detect.sh — OS/distro/arch/env detection & PATH normalization (English only)
 
 if [ -n "${_CKA_DETECT_SH:-}" ]; then return 0; fi
 _CKA_DETECT_SH=1
 
 has_cmd() { command -v "$1" >/dev/null 2>&1; }
 
+_prepend_path_dir() {
+  local dir="$1"
+  [ -d "$dir" ] || return 0
+  case ":${PATH}:" in
+    *":${dir}:"*) ;;
+    *) PATH="${dir}:${PATH}" ;;
+  esac
+}
+
+refresh_path() {
+  _prepend_path_dir "/usr/local/bin"
+  _prepend_path_dir "/opt/homebrew/bin"
+  _prepend_path_dir "$HOME/.cargo/bin"
+  _prepend_path_dir "$HOME/.local/bin"
+  _prepend_path_dir "${CKA_BIN_DIR:-$HOME/.local/bin}"
+  export PATH
+  hash -r 2>/dev/null || true
+}
+
 detect_os() {
   OS_NAME="unknown"; DISTRO=""; OS_VERSION=""; ARCH="$(uname -m)"
   IS_WSL=0
-  if [ -n "${WSL_DISTRO_NAME:-}" ] || grep -qiE "microsoft|wsl" /proc/version 2>/dev/null; then
+  if [ -n "${WSL_DISTRO_NAME:-}" ] || [ -n "${WSL_INTEROP:-}" ] || grep -qiE "microsoft|wsl" /proc/version 2>/dev/null; then
     IS_WSL=1
   fi
   case "$(uname -s)" in
@@ -44,16 +63,20 @@ detect_os() {
 
 detect_pkg_manager() {
   PKG_MANAGER=""
-  if [ "$OS_NAME" = "macos" ] && has_cmd brew; then
-    PKG_MANAGER="brew"
+  PKG_SUDO=0
+  if [ "$OS_NAME" = "macos" ]; then
+    if has_cmd brew || [ -x /opt/homebrew/bin/brew ] || [ -x /usr/local/bin/brew ]; then
+      refresh_path
+      PKG_MANAGER="brew"
+    fi
   elif [ "$OS_NAME" = "wsl" ] || [ "$OS_NAME" = "ubuntu" ] || [ "$OS_NAME" = "debian" ]; then
     if has_cmd apt-get; then PKG_SUDO=1; PKG_MANAGER="apt"; fi
   elif [ "$OS_NAME" = "fedora" ]; then
-    has_cmd dnf && PKG_MANAGER="dnf"
+    if has_cmd dnf; then PKG_SUDO=1; PKG_MANAGER="dnf"; fi
   elif [ "$OS_NAME" = "arch" ]; then
-    has_cmd pacman && PKG_MANAGER="pacman"
+    if has_cmd pacman; then PKG_SUDO=1; PKG_MANAGER="pacman"; fi
   elif has_cmd snap; then
-    PKG_MANAGER="snap"
+    PKG_SUDO=1; PKG_MANAGER="snap"
   fi
 }
 
@@ -75,20 +98,25 @@ detect_provider() {
 }
 
 detect_memory_gb() {
+  local bytes kb
   if [ "$OS_NAME" = "macos" ]; then
-    MEM_GB=$(( $(sysctl -n hw.memsize) / 1073741824 ))
+    bytes="$(sysctl -n hw.memsize 2>/dev/null || echo 0)"
+    MEM_GB=$(( ${bytes:-0} / 1073741824 ))
   else
-    MEM_GB=$(( $(awk '/MemTotal/ {print $2}' /proc/meminfo) / 1048576 ))
+    kb="$(awk '/MemTotal/ {print $2; exit}' /proc/meminfo 2>/dev/null || echo 0)"
+    MEM_GB=$(( ${kb:-0} / 1048576 ))
   fi
 }
 
 detect_disk_free_gb() {
-  DISK_FREE_GB=$(df -Pk "${PWD}" | awk 'NR==2 {printf "%d", $4/1048576}')
+  local val
+  val="$(df -Pk "${PWD}" 2>/dev/null | awk 'NR==2 {printf "%d", $4/1048576}')"
+  DISK_FREE_GB="${val:-0}"
 }
 
 detect_bridge_subnet() {
   BRIDGE_SUBNET=""
-  local gw
+  local gw=""
   if [ "$OS_NAME" = "macos" ]; then
     gw=$(netstat -rn -f inet 2>/dev/null | awk '$1=="default" {print $2; exit}')
   else
@@ -99,9 +127,26 @@ detect_bridge_subnet() {
   fi
 }
 
-# systemd + cgroup v2 are required inside WSL for kind nodes
+# systemd + cgroup v2 are required inside WSL for native Docker + kind nodes
+# (or Docker Desktop WSL integration may supply the Docker daemon).
 detect_wsl_capabilities() {
-  WSL_SYSTEMD=0; WSL_CGROUP_V2=0
-  if [ "$(ps -p 1 -o comm= 2>/dev/null | tr -d '[:space:]')" = "systemd" ]; then WSL_SYSTEMD=1; fi
-  if [ "$(stat -fc %T /sys/fs/cgroup 2>/dev/null)" = "cgroup2fs" ]; then WSL_CGROUP_V2=1; fi
+  WSL_SYSTEMD=0
+  WSL_CGROUP_V2=0
+  WSL_DOCKER_DESKTOP=0
+  [ "$OS_NAME" = "wsl" ] || return 0
+  local pid1 fs_type docker_os
+  pid1="$(ps -p 1 -o comm= 2>/dev/null | tr -d '[:space:]')"
+  if [ "$pid1" = "systemd" ]; then WSL_SYSTEMD=1; fi
+  fs_type="$(stat -fc %T /sys/fs/cgroup 2>/dev/null || true)"
+  if [ "$fs_type" = "cgroup2fs" ] || [ -d /sys/fs/cgroup/unified ]; then
+    WSL_CGROUP_V2=1
+  fi
+  if [ -d /mnt/wsl/docker-desktop ]; then
+    WSL_DOCKER_DESKTOP=1
+  elif has_cmd docker; then
+    docker_os="$(docker info --format '{{.OperatingSystem}}' 2>/dev/null || true)"
+    case "$docker_os" in
+      *[Dd]ocker\ [Dd]esktop*) WSL_DOCKER_DESKTOP=1 ;;
+    esac
+  fi
 }

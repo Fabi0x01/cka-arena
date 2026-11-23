@@ -5,10 +5,12 @@
 set -euo pipefail
 
 CKA_DIR="${CKA_DIR:-$HOME/.cka-arena}"
-export PATH="$HOME/.local/bin:$PATH"
+export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 LOG="${CKA_SETUP_LOG:-$CKA_DIR/setup.log}"
 POD_CIDR="10.244.0.0/16"
-K8S_REPO="v1.31"
+K8S_REPO="${K8S_REPO:-v1.31}"
+WEAVE_YAML="${WEAVE_YAML:-https://github.com/weaveworks/weave/releases/download/v2.8.1/weave-daemonset-k8s.yaml}"
+CALICO_YAML="${CALICO_YAML:-https://raw.githubusercontent.com/projectcalico/calico/v3.28.2/manifests/calico.yaml}"
 
 mkdir -p "$CKA_DIR"
 say() { echo "[cluster-up] $*" | tee -a "$LOG" >/dev/null; }
@@ -52,6 +54,7 @@ packages:
   - curl
   - gnupg
   - jq
+  - vim
   - containerd
   - conntrack
   - socat
@@ -161,34 +164,36 @@ for worker in node01 node02; do
     continue
   fi
   say "$worker joining…"
-  multipass exec "$worker" -- sudo $join_cmd >>"$LOG" 2>&1 \
+  multipass exec "$worker" -- sudo bash -c "$join_cmd" >>"$LOG" 2>&1 \
     || die "$worker failed to join (see $LOG)"
 done
 
 # ---------------------------------------------------------------- CNI
 if kubectl --kubeconfig "$CKA_DIR/kubeconfig" get daemonset -n kube-system weave-net >/dev/null 2>&1; then
   say "weave already installed"
-else
-  say "installing weave CNI…"
-  kubectl --kubeconfig "$CKA_DIR/kubeconfig" apply -f \
-    "https://github.com/weaveworks/weave/releases/download/v2.8.1/weave-daemonset-k8s.yaml" >>"$LOG" 2>&1 \
-    || die "weave install failed (see $LOG)"
+elif ! kubectl --kubeconfig "$CKA_DIR/kubeconfig" apply -f "$WEAVE_YAML" >>"$LOG" 2>&1; then
+  say "WARNING: weave install failed — falling back to Calico (also enforces NetworkPolicy)"
+  kubectl --kubeconfig "$CKA_DIR/kubeconfig" apply -f "$CALICO_YAML" >>"$LOG" 2>&1 \
+    || die "CNI installation failed (weave and calico) — see $LOG"
 fi
 
 say "waiting for 3 nodes Ready (up to 5 min)…"
+ready=0
 for _ in $(seq 1 60); do
-  ready=$(kubectl --kubeconfig "$CKA_DIR/kubeconfig" get nodes --no-headers 2>/dev/null | grep -c " Ready " || true)
+  ready=$(kubectl --kubeconfig "$CKA_DIR/kubeconfig" get nodes --no-headers 2>/dev/null | awk '$2=="Ready" {c++} END {print c+0}')
   [ "${ready:-0}" -ge 3 ] && break
   sleep 5
 done
-ready=$(kubectl --kubeconfig "$CKA_DIR/kubeconfig" get nodes --no-headers 2>/dev/null | grep -c " Ready " || true)
+ready=$(kubectl --kubeconfig "$CKA_DIR/kubeconfig" get nodes --no-headers 2>/dev/null | awk '$2=="Ready" {c++} END {print c+0}')
 [ "${ready:-0}" -ge 3 ] || die "only ${ready}/3 nodes became Ready"
 
-python3 - "$CKA_DIR/nodes.json" <<'PY'
-import json, sys
-names = ["controlplane", "node01", "node02"]
-json.dump({n: {"container": None, "node": n} for n in names}, open(sys.argv[1], "w"), indent=2)
-PY
+cat <<'EOF' > "$CKA_DIR/nodes.json"
+{
+  "controlplane": {"container": null, "node": "controlplane"},
+  "node01": {"container": null, "node": "node01"},
+  "node02": {"container": null, "node": "node02"}
+}
+EOF
 
 kubectl --kubeconfig "$CKA_DIR/kubeconfig" get nodes
 say "multipass lab ready (kubeconfig: $CKA_DIR/kubeconfig)"
