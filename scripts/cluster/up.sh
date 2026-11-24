@@ -5,7 +5,7 @@
 set -euo pipefail
 
 CKA_DIR="${CKA_DIR:-$HOME/.cka-arena}"
-export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+export PATH="$PATH:$HOME/.local/bin:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin"
 LOG="${CKA_SETUP_LOG:-$CKA_DIR/setup.log}"
 POD_CIDR="10.244.0.0/16"
 K8S_REPO="${K8S_REPO:-v1.31}"
@@ -55,6 +55,7 @@ packages:
   - gnupg
   - jq
   - vim
+  - etcd-client
   - containerd
   - conntrack
   - socat
@@ -68,9 +69,16 @@ write_files:
       net.bridge.bridge-nf-call-iptables = 1
       net.bridge.bridge-nf-call-ip6tables = 1
       net.ipv4.ip_forward = 1
+  - path: /etc/containerd/certs.d/docker.io/hosts.toml
+    content: |
+      server = "https://registry-1.docker.io"
+      [host."https://mirror.gcr.io"]
+        capabilities = ["pull", "resolve"]
   - path: /etc/containerd/config.toml
     content: |
       version = 2
+      [plugins."io.containerd.grpc.v1.cri".registry]
+        config_path = "/etc/containerd/certs.d"
       [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
         SystemdCgroup = true
 runcmd:

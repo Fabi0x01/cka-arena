@@ -122,18 +122,58 @@ class ScenarioEngine:
     def label_args(self, env: ScenarioEnvelope) -> list[str]:
         return [f"{MANAGED_LABEL}=true", f"{SCENARIO_LABEL}={env.id}"]
 
+    def _translate_node_refs(self, obj):
+        if isinstance(obj, list):
+            return [self._translate_node_refs(item) for item in obj]
+        if not isinstance(obj, dict):
+            return obj
+        out = {}
+        for k, v in obj.items():
+            if k == "nodeName" and isinstance(v, str) and v in config.VM_NAMES:
+                out[k] = provider.resolve_node_name(v)
+            elif k == "nodeSelector" and isinstance(v, dict):
+                sel = dict(v)
+                host = sel.get("kubernetes.io/hostname")
+                if isinstance(host, str) and host in config.VM_NAMES:
+                    sel["kubernetes.io/hostname"] = provider.resolve_node_name(host)
+                out[k] = sel
+            else:
+                out[k] = self._translate_node_refs(v)
+        return out
+
     def _labeled_manifests(self, env: ScenarioEnvelope) -> list[dict]:
         docs: list[dict] = []
+        translate_nodes = provider.provider_name() == "kind"
         for text in env.setup.manifests:
             for doc in yaml.safe_load_all(text):
                 if not isinstance(doc, dict):
                     continue
+                if translate_nodes:
+                    doc = self._translate_node_refs(doc)
                 meta = doc.setdefault("metadata", {})
                 labels = meta.setdefault("labels", {})
                 labels[MANAGED_LABEL] = "true"
                 labels[SCENARIO_LABEL] = env.id
                 docs.append(doc)
         return docs
+
+    def render_manifests_payload(self, manifests: list[str]) -> str:
+        """Render YAML manifests into a multi-doc payload with kind node-name translation."""
+        if provider.provider_name() != "kind":
+            return "\n---\n".join(manifests)
+        rendered: list[str] = []
+        for text in manifests:
+            try:
+                docs = [
+                    self._translate_node_refs(doc)
+                    for doc in yaml.safe_load_all(text)
+                    if doc is not None
+                ]
+            except yaml.YAMLError:
+                rendered.append(text)
+                continue
+            rendered.extend(yaml.safe_dump(doc, sort_keys=False) for doc in docs)
+        return "\n---\n".join(rendered)
 
     async def _force_finalize_namespace(self, name: str) -> bool:
         """Remove stuck kubernetes finalizer on Terminating namespaces."""

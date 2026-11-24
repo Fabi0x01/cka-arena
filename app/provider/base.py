@@ -6,6 +6,7 @@ para o nome real do nó e para o transporte (SSH ou docker exec). Ver SETUP_PLAN
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 
@@ -69,6 +70,36 @@ def get() -> Provider:
             from app.provider.multipass import MultipassProvider
             _PROVIDER = MultipassProvider()
     return _PROVIDER
+
+
+_KIND_DEFAULT_NODES = {
+    "controlplane": "cka-control-plane",
+    "node01": "cka-worker",
+    "node02": "cka-worker2",
+}
+
+
+def node_name_map() -> dict[str, str]:
+    """Map logical node names (controlplane/node01/node02) to Kubernetes cluster node names."""
+    if provider_name() != "kind":
+        return {name: name for name in config.VM_NAMES}
+    mapping = dict(_KIND_DEFAULT_NODES)
+    try:
+        raw = json.loads((config.CKA_DIR / "nodes.json").read_text())
+        if isinstance(raw, dict):
+            for name, entry in raw.items():
+                if isinstance(entry, dict):
+                    real = entry.get("node") or entry.get("container")
+                    if real:
+                        mapping[str(name)] = str(real)
+    except (OSError, ValueError):
+        pass
+    return mapping
+
+
+def resolve_node_name(name: str) -> str:
+    """Translate logical node name -> real Kubernetes node name for the active provider."""
+    return node_name_map().get(name, name)
 
 
 def reset() -> None:

@@ -21,11 +21,17 @@ class ClusterDoctor:
     async def health(self) -> dict:
         nodes = await cluster.get_nodes()
         kubectl_ok = (await cluster.kubectl(["version", "--request-timeout=5s"], timeout=10)).ok
-        ssh_ips = await self.resolve_node_ips()
+        try:
+            prov_nodes = await provider.get().nodes()
+        except Exception:
+            prov_nodes = {}
+        ssh_ips = {name: info.ip for name, info in prov_nodes.items()}
         node_rows: list[dict] = []
         for name in config.VM_NAMES:
+            pinfo = prov_nodes.get(name)
             ip = ssh_ips.get(name)
-            kb = next((n for n in nodes if n["name"] == name), {})
+            real_name = pinfo.real_name if (pinfo and pinfo.real_name) else provider.resolve_node_name(name)
+            kb = next((n for n in nodes if n["name"] in (name, real_name)), {})
             row = {
                 "name": name,
                 "ready": bool(kb.get("ready")),
@@ -67,7 +73,7 @@ class ClusterDoctor:
 
     async def addons(self) -> list[dict]:
         addons: list[dict] = [
-            {"name": "helm (Mac)", "status": "present" if shutil.which("helm") else "absent"},
+            {"name": "helm (host)", "status": "present" if shutil.which("helm") else "absent"},
         ]
         etcdctl = "unknown"
         try:
@@ -80,21 +86,12 @@ class ClusterDoctor:
             )).ok else "absent"
         addons.append({"name": "etcdctl (controlplane)", "status": etcdctl})
 
-        pods = await cluster.pods("kube-system")
-
-        def pod_state(prefix: str) -> str:
-            matched = [p for p in pods if p["name"].startswith(prefix)]
-            if not matched:
-                return "absent"
-            return "present" if all(p["ready"] for p in matched) else "degraded"
-
         addons.append({"name": "metrics-server", "status": await self._metrics_state()})
-        npc = await self._weave_npc_state()
+        npc_status, npc_detail = await self._network_policy_state()
         addons.append({
             "name": "network_policy_enforcement",
-            "status": npc,
-            "detail": "weave-npc (container no weave-net)" if npc != "absent"
-            else "sem weave-npc — NetworkPolicy não é aplicada",
+            "status": npc_status,
+            "detail": npc_detail,
         })
 
         gateway_crd = await cluster.crd_exists("gateways.gateway.networking.k8s.io")
@@ -122,22 +119,39 @@ class ClusterDoctor:
                 return "present" if condition.get("status") == "True" else "degraded"
         return "degraded"
 
-    async def _weave_npc_state(self) -> str:
+    async def _network_policy_state(self) -> tuple[str, str]:
         res = await cluster.kubectl(
             ["get", "pods", "-n", "kube-system", "-o", "json"], timeout=15
         )
         if not res.ok:
-            return "unknown"
+            return "unknown", "kube-system unreachable"
         try:
             data = json.loads(res.out)
         except ValueError:
-            return "unknown"
-        for item in data.get("items", []):
-            statuses = item.get("status", {}).get("containerStatuses") or []
-            npc = [cs for cs in statuses if cs.get("name") == "weave-npc"]
-            if npc:
-                return "present" if all(cs.get("ready") for cs in npc) else "degraded"
-        return "absent"
+            return "unknown", "invalid kube-system pod list"
+        items = data.get("items", [])
+        npc_statuses = []
+        for item in items:
+            for cs in item.get("status", {}).get("containerStatuses") or []:
+                if cs.get("name") == "weave-npc":
+                    npc_statuses.append(cs)
+        if npc_statuses:
+            status = "present" if all(cs.get("ready") for cs in npc_statuses) else "degraded"
+            return status, "weave-npc (container no weave-net)"
+        for prefix, label in (("calico-node", "Calico network policy agent"), ("cilium", "Cilium eBPF agent")):
+            matched = [it for it in items if (it.get("metadata") or {}).get("name", "").startswith(prefix)]
+            if matched:
+                all_ready = all(
+                    bool((it.get("status") or {}).get("containerStatuses"))
+                    and all(cs.get("ready") for cs in (it["status"]["containerStatuses"] or []))
+                    for it in matched
+                )
+                return ("present" if all_ready else "degraded"), label
+        return "absent", "sem weave-npc / calico-node — NetworkPolicy não é aplicada"
+
+    async def _weave_npc_state(self) -> str:
+        status, _detail = await self._network_policy_state()
+        return status
 
     async def _gateway_controller_state(self) -> tuple[str, str | None]:
         for namespace in ("envoy-gateway-system", "nginx-gateway", "envoy-gateway"):
@@ -173,11 +187,19 @@ class ClusterDoctor:
         """Snapshot de arquivos do nó (manifests, kubelet, containerd, systemd) — idempotente."""
         script = f"""
 set -e
-mkdir -p {config.BACKUP_ROOT}/baseline
-test -d {config.BACKUP_ROOT}/baseline/manifests || cp -a /etc/kubernetes/manifests {config.BACKUP_ROOT}/baseline/manifests
-test -f {config.BACKUP_ROOT}/baseline/kubelet-config.yaml || cp -a /var/lib/kubelet/config.yaml {config.BACKUP_ROOT}/baseline/kubelet-config.yaml
-test -f {config.BACKUP_ROOT}/baseline/containerd-config.toml || cp -a /etc/containerd/config.toml {config.BACKUP_ROOT}/baseline/containerd-config.toml
-test -d {config.BACKUP_ROOT}/baseline/kubelet.service.d || cp -a /etc/systemd/system/kubelet.service.d {config.BACKUP_ROOT}/baseline/kubelet.service.d
+mkdir -p {config.BACKUP_ROOT}/baseline /etc/kubernetes/manifests
+if [ ! -d {config.BACKUP_ROOT}/baseline/manifests ]; then
+  cp -a /etc/kubernetes/manifests {config.BACKUP_ROOT}/baseline/manifests
+fi
+if [ -f /var/lib/kubelet/config.yaml ] && [ ! -f {config.BACKUP_ROOT}/baseline/kubelet-config.yaml ]; then
+  cp -a /var/lib/kubelet/config.yaml {config.BACKUP_ROOT}/baseline/kubelet-config.yaml
+fi
+if [ -f /etc/containerd/config.toml ] && [ ! -f {config.BACKUP_ROOT}/baseline/containerd-config.toml ]; then
+  cp -a /etc/containerd/config.toml {config.BACKUP_ROOT}/baseline/containerd-config.toml
+fi
+if [ -d /etc/systemd/system/kubelet.service.d ] && [ ! -d {config.BACKUP_ROOT}/baseline/kubelet.service.d ]; then
+  cp -a /etc/systemd/system/kubelet.service.d {config.BACKUP_ROOT}/baseline/kubelet.service.d
+fi
 echo BASELINE_OK
 """
         results: dict[str, dict] = {}

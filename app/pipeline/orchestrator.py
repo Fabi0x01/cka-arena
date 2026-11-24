@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import platform
 import time
 import uuid
 from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError
 
-from app import bank, cluster, config, curriculum, db, planner
+from app import bank, cluster, config, curriculum, db, planner, provider
 from app.doctor import ClusterDoctor
 from app.events import EventBroker
 from app.llm_client import LLMClient
@@ -556,7 +557,7 @@ class GenerationPipeline:
             f"- {n['name']} (ready={n['ready']}, internalIP={n['internal_ip']})" for n in nodes
         ) or "- controlplane, node01, node02"
         return (
-            f"Kubernetes: {version} (kubeadm, Ubuntu arm64, containerd)\n"
+            f"Kubernetes: {version} (kubeadm, {platform.machine()}, {provider.get().name}, containerd)\n"
             f"Nodes:\n{node_lines}\n"
             f"kubectl context: {config.KUBECTL_CONTEXT}\n"
             f"Addons: {', '.join(addons)}"

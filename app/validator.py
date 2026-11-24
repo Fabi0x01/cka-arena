@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import shlex
 import time
@@ -388,7 +389,12 @@ async def chk_kubectl_jsonpath(params: dict) -> tuple[str, dict]:
         return classify(res), evidence
     actual = res.out.strip()
     evidence["actual"] = actual
-    return (PASS if compare(actual, operator, expected) else FAIL), evidence
+    passed = compare(actual, operator, expected)
+    if not passed and isinstance(expected, str) and expected in config.VM_NAMES:
+        resolved_exp = provider.resolve_node_name(expected)
+        if resolved_exp != expected:
+            passed = compare(actual, operator, resolved_exp)
+    return (PASS if passed else FAIL), evidence
 
 
 async def chk_pod_status_ready(params: dict) -> tuple[str, dict]:
@@ -407,9 +413,10 @@ async def chk_pod_status_ready(params: dict) -> tuple[str, dict]:
 
 async def chk_node_status_ready(params: dict) -> tuple[str, dict]:
     node_name = params["node_name"]
+    resolved = provider.resolve_node_name(node_name)
     nodes = await cluster.get_nodes()
-    match = next((n for n in nodes if n["name"] == node_name), None)
-    evidence = {"node_name": node_name, "found": bool(match),
+    match = next((n for n in nodes if n["name"] in (node_name, resolved)), None)
+    evidence = {"node_name": node_name, "resolved_node_name": resolved, "found": bool(match),
                 "ready": bool(match and match["ready"]),
                 "nodes": [{"name": n["name"], "ready": n["ready"]} for n in nodes]}
     if not match:
@@ -527,7 +534,8 @@ async def chk_helm_release_state(params: dict) -> tuple[str, dict]:
     release = params["release_name"]
     expected_status = params.get("expected_status", "deployed")
     min_revision = int(params.get("min_revision", 0))
-    res = await run_local(["helm", "list", "-n", namespace, "-o", "json"], timeout=20)
+    env = {**os.environ, "KUBECONFIG": str(config.KUBECONFIG_PATH)}
+    res = await run_local(["helm", "list", "-n", namespace, "-o", "json"], timeout=20, env=env)
     evidence = {"namespace": namespace, "release_name": release,
                 "expected_status": expected_status, "min_revision": min_revision}
     if not res.ok:

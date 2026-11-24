@@ -25,6 +25,10 @@ LOCAL_PATH = (
     "deploy/local-path-storage.yaml"
 )
 ENVOY_VERSION = "v1.2.0"
+ENVOY_CHARTS = (
+    "oci://mirror.gcr.io/envoyproxy/gateway-helm",
+    "oci://docker.io/envoyproxy/gateway-helm",
+)
 
 
 def log(message: str) -> None:
@@ -77,23 +81,20 @@ async def install_gateway() -> bool:
         return True
     from app.ssh_runner import run_local
 
-    old = os.environ.get("KUBECONFIG")
-    os.environ["KUBECONFIG"] = str(config.KUBECONFIG_PATH)
-    try:
+    helm_env = {**os.environ, "KUBECONFIG": str(config.KUBECONFIG_PATH)}
+    last_err = ""
+    for chart in ENVOY_CHARTS:
         res = await run_local([
-            "helm", "upgrade", "--install", "eg", "oci://docker.io/envoyproxy/gateway-helm",
+            "helm", "upgrade", "--install", "eg", chart,
             "--version", ENVOY_VERSION, "-n", "envoy-gateway-system", "--create-namespace",
-        ], timeout=300)
-    finally:
-        if old is None:
-            os.environ.pop("KUBECONFIG", None)
-        else:
-            os.environ["KUBECONFIG"] = old
-    if not res.ok:
-        log(f"envoy-gateway: helm failed — {(res.err or res.out).strip()[:200]}")
-        return False
-    log("envoy-gateway: installed via helm")
-    return True
+        ], timeout=300, env=helm_env)
+        if res.ok:
+            log(f"envoy-gateway: installed via helm ({chart})")
+            return True
+        last_err = (res.err or res.out).strip()[:200]
+        log(f"envoy-gateway: helm attempt failed ({chart}) — {last_err}")
+    log(f"envoy-gateway: all helm chart registries failed — {last_err}")
+    return False
 
 
 async def install_local_path() -> bool:

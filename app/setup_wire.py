@@ -45,16 +45,8 @@ async def wire_multipass() -> int:
     return 0
 
 
-async def wire_kind() -> int:
-    contexts = ssh_runner.ensure_exam_contexts(config.KUBECONFIG_PATH)
-    print(f"[wire] kind kubeconfig contexts: {contexts}")
-    if not await cluster.wait_readyz(timeout_s=60):
-        print("[wire] kube-apiserver is not ready — check the kind cluster")
-        return 1
-    nodes = await cluster.get_nodes()
-    for node in nodes:
-        print(f"[wire] node {node['name']}: ready={node['ready']} ip={node['internal_ip']}")
-
+async def sync_kind_node_exam_profile() -> dict[str, bool]:
+    """Install PSI exam .vimrc and bash profile inside running kind node containers."""
     node_provider = provider.get()
     vimrc_b64 = base64.b64encode((EXAM_VIMRC_TEXT.rstrip() + "\n").encode()).decode("ascii")
     block_text = (
@@ -76,6 +68,19 @@ async def wire_kind() -> int:
             synced[name] = res.ok
         except Exception:
             synced[name] = False
+    return synced
+
+
+async def wire_kind() -> int:
+    contexts = ssh_runner.ensure_exam_contexts(config.KUBECONFIG_PATH)
+    print(f"[wire] kind kubeconfig contexts: {contexts}")
+    if not await cluster.wait_readyz(timeout_s=60):
+        print("[wire] kube-apiserver is not ready — check the kind cluster")
+        return 1
+    nodes = await cluster.get_nodes()
+    for node in nodes:
+        print(f"[wire] node {node['name']}: ready={node['ready']} ip={node['internal_ip']}")
+    synced = await sync_kind_node_exam_profile()
     print(f"[wire] kind node exam vim/bashrc synced: {synced}")
     return 0
 

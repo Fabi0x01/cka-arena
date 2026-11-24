@@ -409,6 +409,102 @@ ensure_docker_ready() {
   return 1
 }
 
+ensure_docker_registry_ready() {
+  [ "$PROVIDER" = "kind" ] || return 0
+  [ "$CHECK_ONLY" = "1" ] && return 0
+  [ "$SKIP_CLUSTER" = "1" ] && return 0
+
+  local ctr_count kind_img_ver
+  kind_img_ver="${CKA_KIND_NODE_VER:-v1.31.2@sha256:18fbefc20a7113353c7b75b5c869d7145a6abd6269154825872dc59c1329912e}"
+  ctr_count="$(_run_with_docker_group docker ps -a --filter "label=io.x-k8s.kind.cluster=cka" -q 2>/dev/null | wc -l | tr -d '[:space:]')"
+  if [ "${ctr_count:-0}" -ge 3 ]; then return 0; fi
+  if _run_with_docker_group docker image inspect "mirror.gcr.io/kindest/node:${kind_img_ver}" >/dev/null 2>&1 \
+    || _run_with_docker_group docker image inspect "docker.io/kindest/node:${kind_img_ver}" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if [ -f "$HOME/.docker/config.json" ] && grep -qE '"credsStore"[[:space:]]*:[[:space:]]*".*desktop\.exe"' "$HOME/.docker/config.json" 2>/dev/null; then
+    if ! has_cmd docker-credential-desktop.exe; then
+      warn "detected Windows Docker Desktop credsStore in ~/.docker/config.json (kind-up.sh uses an isolated config for public pulls)"
+    fi
+  fi
+
+  local shell_http shell_https shell_noproxy daemon_proxy=""
+  shell_http="${HTTP_PROXY:-${http_proxy:-}}"
+  shell_https="${HTTPS_PROXY:-${https_proxy:-}}"
+  shell_noproxy="${NO_PROXY:-${no_proxy:-localhost,127.0.0.1,.svc,.cluster.local}}"
+  if [ "$OS_NAME" != "macos" ] && [ "${WSL_DOCKER_DESKTOP:-0}" != "1" ] && has_cmd systemctl \
+    && [ -n "${shell_http}${shell_https}" ]; then
+    daemon_proxy="$(_run_with_docker_group docker info --format '{{.HTTPProxy}}{{.HTTPSProxy}}' 2>/dev/null || true)"
+    if [ -z "$daemon_proxy" ]; then
+      if confirm "Proxy env vars are set in your shell, but Docker daemon has no proxy configured. Configure /etc/systemd/system/docker.service.d/http-proxy.conf and restart Docker?" "y"; then
+        ensure_sudo || return 1
+        _sudo mkdir -p /etc/systemd/system/docker.service.d
+        printf '[Service]\n' | _sudo tee /etc/systemd/system/docker.service.d/http-proxy.conf >/dev/null
+        if [ -n "$shell_http" ]; then
+          printf 'Environment="HTTP_PROXY=%s"\n' "$shell_http" | _sudo tee -a /etc/systemd/system/docker.service.d/http-proxy.conf >/dev/null
+        fi
+        if [ -n "$shell_https" ]; then
+          printf 'Environment="HTTPS_PROXY=%s"\n' "$shell_https" | _sudo tee -a /etc/systemd/system/docker.service.d/http-proxy.conf >/dev/null
+        fi
+        printf 'Environment="NO_PROXY=%s"\n' "$shell_noproxy" | _sudo tee -a /etc/systemd/system/docker.service.d/http-proxy.conf >/dev/null
+        spinner_start "restarting docker with proxy configuration…"
+        if _sudo systemctl daemon-reload >>"$CKA_SETUP_LOG" 2>&1 && _sudo systemctl restart docker >>"$CKA_SETUP_LOG" 2>&1; then
+          sleep 2
+          spinner_stop "docker restarted with proxy configuration"
+        else
+          spinner_stop
+          warn "failed to restart docker after proxy update — see $CKA_SETUP_LOG"
+        fi
+      fi
+    fi
+  fi
+
+  has_cmd curl || return 0
+  local probe_rc=0
+  curl -fsSI --max-time 8 "https://mirror.gcr.io/v2/" >/dev/null 2>&1 || probe_rc=$?
+  [ "$probe_rc" -eq 0 ] && return 0
+
+  if [ "$probe_rc" -eq 60 ] && [ "$OS_NAME" = "wsl" ] && has_cmd hwclock; then
+    if confirm "TLS certificate validation failed (common after WSL sleep clock drift). Sync WSL clock now (sudo hwclock -s)?" "y"; then
+      ensure_sudo || return 1
+      _sudo hwclock -s >>"$CKA_SETUP_LOG" 2>&1 || true
+    fi
+  elif [ "$probe_rc" -eq 6 ] && [ "$OS_NAME" != "macos" ] && [ "${WSL_DOCKER_DESKTOP:-0}" != "1" ] && has_cmd systemctl && has_cmd jq; then
+    if confirm "DNS resolution failed for container registries. Configure fallback DNS (1.1.1.1, 8.8.8.8) in /etc/docker/daemon.json and restart Docker?" "y"; then
+      ensure_sudo || return 1
+      local existing="{}" updated_json
+      if _sudo test -s /etc/docker/daemon.json; then
+        existing="$(_sudo cat /etc/docker/daemon.json 2>/dev/null || echo "{}")"
+      fi
+      updated_json="$(printf '%s' "$existing" | jq '. + {"dns": ["1.1.1.1", "8.8.8.8"]}' 2>/dev/null || echo '{"dns": ["1.1.1.1", "8.8.8.8"]}')"
+      _sudo mkdir -p /etc/docker
+      printf '%s\n' "$updated_json" | _sudo tee /etc/docker/daemon.json >/dev/null
+      spinner_start "restarting docker with fallback DNS…"
+      if _sudo systemctl restart docker >>"$CKA_SETUP_LOG" 2>&1; then
+        sleep 2
+        spinner_stop "docker restarted with fallback DNS"
+      else
+        spinner_stop
+        warn "failed to restart docker after DNS update — see $CKA_SETUP_LOG"
+      fi
+    fi
+  elif [ "$OS_NAME" = "wsl" ] && has_cmd ip && { [ "$probe_rc" -eq 28 ] || [ "$probe_rc" -eq 35 ] || [ "$probe_rc" -eq 56 ]; }; then
+    local iface mtu
+    iface="$(_detect_default_iface)"
+    if [ -n "$iface" ]; then
+      mtu="$(ip link show "$iface" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="mtu"){print $(i+1); exit}}')"
+      if [ "${mtu:-1500}" -ge 1500 ]; then
+        if confirm "Registry connection timed out (common WSL2 MTU issue on '${iface}' with MTU ${mtu}). Temporarily set MTU to 1350?" "y"; then
+          ensure_sudo || return 1
+          _sudo ip link set dev "$iface" mtu 1350 >>"$CKA_SETUP_LOG" 2>&1 || true
+        fi
+      fi
+    fi
+  fi
+  return 0
+}
+
 _run_with_docker_group() {
   if [ "${USE_SG_DOCKER:-0}" != "1" ]; then
     "$@"
@@ -496,6 +592,15 @@ run_cluster() {
   spinner_stop
   err "cluster provisioning failed — last lines of $CKA_SETUP_LOG:"
   tail -20 "$CKA_SETUP_LOG" >&2 || true
+  if grep -qiE "failed to fetch anonymous token|i/o timeout|TLS handshake|x509|temporary failure in name resolution|server misbehaving" "$CKA_SETUP_LOG" 2>/dev/null; then
+    echo >&2
+    warn "Container registry network issue detected on WSL2/Linux:"
+    warn "  1. Clock drift (TLS/x509):  sudo hwclock -s"
+    warn "  2. MTU timeout/reset:       sudo ip link set dev eth0 mtu 1350"
+    warn "  3. DNS lookup failure:      set [network] generateResolvConf=false in /etc/wsl.conf + nameserver 1.1.1.1 in /etc/resolv.conf"
+    warn "  4. Stale Docker login/VPN:  docker logout && disconnect VPN (or set HTTP_PROXY/HTTPS_PROXY before ./setup.sh)"
+    warn "  5. Custom mirror override:  CKA_KIND_IMAGE=<your-mirror>/kindest/node:v1.31.2 ./setup.sh"
+  fi
   exit 1
 }
 
@@ -651,6 +756,11 @@ main() {
   if ! ensure_docker_ready; then
     echo
     err "setup stopped — resolve the Docker issue above and re-run ./setup.sh"
+    exit 1
+  fi
+  if ! ensure_docker_registry_ready; then
+    echo
+    err "setup stopped — resolve the Docker registry network issue above and re-run ./setup.sh"
     exit 1
   fi
 

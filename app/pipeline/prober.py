@@ -292,7 +292,7 @@ class ScenarioProber:
             if not res.ok and not is_convergence_wait:
                 return f"{raw[:80]}: {(res.err or res.out).strip()[:200]}"
         if env.solution.manifests:
-            payload = "\n---\n".join(env.solution.manifests)
+            payload = self.engine.render_manifests_payload(env.solution.manifests)
             res = await cluster.kubectl(["apply", "-f", "-"], timeout=90, stdin_data=payload)
             if not res.ok:
                 return (res.err or res.out).strip()[:300]

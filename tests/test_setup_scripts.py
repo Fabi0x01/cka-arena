@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import pty
 import select
@@ -360,3 +361,328 @@ def test_wire_kind_configures_exam_contexts_and_nodes(tmp_path: Path, monkeypatc
     assert {"cka", "cka-ops", "cka-edge"}.issubset(names)
     assert len(calls) == 3
     assert all("/root/.vimrc" in cmd for _node, cmd in calls)
+
+
+def test_kind_up_uses_mirror_first_isolated_docker_config_and_recovers_partial_cluster(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    cka_dir = tmp_path / "cka"
+    cka_dir.mkdir()
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    trace_file = state_dir / "trace.log"
+    kind_cfg_copy = state_dir / "kind-config.yaml"
+
+    # Mock docker:
+    # - ps -a for incomplete cluster -> returns 1 container initially, simulating broken cluster
+    # - pull -> fails once when DOCKER_CONFIG is unset/default, succeeds when DOCKER_CONFIG is isolated temp dir
+    # - image inspect -> returns 1 (not cached yet)
+    # - info/exec/cp -> succeed cleanly
+    (bin_dir / "docker").write_text(f"""#!/usr/bin/env bash
+set -u
+echo "docker DOCKER_CONFIG=${{DOCKER_CONFIG:-UNSET}} $*" >> "{trace_file}"
+case "${{1:-}}" in
+  info) exit 0 ;;
+  image)
+    if [ "${{2:-}}" = "inspect" ]; then exit 1; fi
+    exit 0 ;;
+  pull)
+    if [ -z "${{DOCKER_CONFIG:-}}" ]; then
+      echo "failed to authorize: failed to fetch anonymous token" >&2
+      exit 1
+    fi
+    exit 0 ;;
+  ps)
+    echo "ctr1"
+    exit 0 ;;
+  exec)
+    if [ "${{3:-}}" = "command" ]; then exit 0; fi
+    exit 0 ;;
+  *) exit 0 ;;
+esac
+""")
+
+    (bin_dir / "kind").write_text(f"""#!/usr/bin/env bash
+set -u
+echo "kind $*" >> "{trace_file}"
+case "${{1:-}}" in
+  get)
+    echo "cka"
+    exit 0 ;;
+  delete)
+    exit 0 ;;
+  create)
+    cat > "{kind_cfg_copy}"
+    exit 0 ;;
+  export)
+    cat <<'KC' > "{cka_dir}/kubeconfig"
+apiVersion: v1
+kind: Config
+clusters:
+- name: kind-cka
+  cluster:
+    server: https://127.0.0.1:6443
+users:
+- name: kind-cka
+  user: {{}}
+contexts:
+- name: kind-cka
+  context:
+    cluster: kind-cka
+    user: kind-cka
+current-context: kind-cka
+KC
+    exit 0 ;;
+esac
+""")
+
+    (bin_dir / "kubectl").write_text("""#!/usr/bin/env bash
+set -u
+case "$*" in
+  *"get daemonset -n kube-system weave-net"*) exit 0 ;;
+  *"get nodes --no-headers"*)
+    printf "cka-control-plane   Ready    control-plane   1m   v1.31.2\n"
+    printf "cka-worker          Ready    <none>          1m   v1.31.2\n"
+    printf "cka-worker2         Ready    <none>          1m   v1.31.2\n"
+    exit 0 ;;
+  *"get nodes -o json"*)
+    cat <<'JSON'
+{"items":[
+  {"metadata":{"name":"cka-control-plane"}},
+  {"metadata":{"name":"cka-worker2"}},
+  {"metadata":{"name":"cka-worker"}}
+]}
+JSON
+    exit 0 ;;
+  *) exit 0 ;;
+esac
+""")
+    for tool in ("docker", "kind", "kubectl"):
+        (bin_dir / tool).chmod(0o755)
+
+    res = subprocess.run(
+        [BASH, str(REPO_ROOT / "scripts" / "cluster" / "kind-up.sh")],
+        cwd=str(REPO_ROOT),
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin",
+            "HOME": str(tmp_path),
+            "CKA_DIR": str(cka_dir),
+            "CKA_SETUP_LOG": str(cka_dir / "setup.log"),
+        },
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert res.returncode == 0, f"stderr={res.stderr}\nlog={(cka_dir / 'setup.log').read_text()}"
+
+    trace = trace_file.read_text()
+    # Incomplete cluster must be deleted before fresh creation
+    assert "kind delete cluster --name cka" in trace
+    # Must try mirror.gcr.io first, fail without isolated config, then recover with isolated DOCKER_CONFIG
+    assert "docker pull mirror.gcr.io/kindest/node:" in trace.replace("DOCKER_CONFIG=UNSET ", "")
+    assert "kind create cluster --name cka --image mirror.gcr.io/kindest/node:" in trace
+    # hosts.toml + containerd certs.d mount must be configured
+    hosts_toml = (cka_dir / "certs.d" / "docker.io" / "hosts.toml").read_text()
+    assert "https://mirror.gcr.io" in hosts_toml
+    cfg_text = kind_cfg_copy.read_text()
+    assert 'config_path = "/etc/containerd/certs.d"' in cfg_text
+    assert str(cka_dir / "certs.d") in cfg_text
+    # nodes.json must map logical names to real kind names
+    nodes_map = json.loads((cka_dir / "nodes.json").read_text())
+    assert nodes_map["controlplane"]["node"] == "cka-control-plane"
+    assert nodes_map["node01"]["node"] == "cka-worker"
+    assert nodes_map["node02"]["node"] == "cka-worker2"
+
+
+def test_addons_install_gateway_tries_mirror_and_falls_back_with_kubeconfig(tmp_path: Path, monkeypatch) -> None:
+    from app import addons, config
+    from app.ssh_runner import ProcResult
+
+    monkeypatch.setattr(config, "KUBECONFIG_PATH", tmp_path / "kubeconfig")
+    monkeypatch.setattr(addons.shutil, "which", lambda name: "/usr/bin/helm" if name == "helm" else None)
+
+    present_calls: list[list[str]] = []
+
+    async def fake_present(args: list[str]) -> bool:
+        present_calls.append(args)
+        # CRD already present, deployment absent
+        return args[:2] == ["get", "crd"]
+
+    helm_calls: list[tuple[list[str], dict | None]] = []
+
+    async def fake_run_local(cmd: list[str], *, timeout: float = 20, stdin_data=None, env=None) -> ProcResult:
+        helm_calls.append((cmd, env))
+        if len(helm_calls) == 1:
+            return ProcResult(1, "", "mirror temporary failure")
+        return ProcResult(0, "", "")
+
+    monkeypatch.setattr(addons, "_present", fake_present)
+    monkeypatch.setattr("app.ssh_runner.run_local", fake_run_local)
+
+    assert asyncio.run(addons.install_gateway()) is True
+    assert len(helm_calls) == 2
+    assert "oci://mirror.gcr.io/envoyproxy/gateway-helm" in helm_calls[0][0]
+    assert "oci://docker.io/envoyproxy/gateway-helm" in helm_calls[1][0]
+    assert helm_calls[0][1]["KUBECONFIG"] == str(tmp_path / "kubeconfig")
+    assert helm_calls[1][1]["KUBECONFIG"] == str(tmp_path / "kubeconfig")
+
+
+def test_kind_provider_node_translation_across_validator_doctor_commands_and_engine(tmp_path: Path, monkeypatch) -> None:
+    from app import commands, config, provider, validator
+    from app.doctor import ClusterDoctor
+    from app.models import ScenarioEnvelope
+    from app.scenario_engine import ScenarioEngine
+    from app.ssh_runner import ProcResult
+
+    cka_dir = tmp_path / "cka"
+    cka_dir.mkdir()
+    (cka_dir / "provider").write_text("kind\n")
+    (cka_dir / "nodes.json").write_text(json.dumps({
+        "controlplane": {"container": "cka-control-plane", "node": "cka-control-plane"},
+        "node01": {"container": "cka-worker", "node": "cka-worker"},
+        "node02": {"container": "cka-worker2", "node": "cka-worker2"},
+    }))
+    monkeypatch.setattr(config, "CKA_DIR", cka_dir)
+    monkeypatch.setattr(config, "KUBECONFIG_PATH", cka_dir / "kubeconfig")
+    monkeypatch.delenv("CKA_PROVIDER", raising=False)
+    provider.reset()
+
+    try:
+        # 1) commands.py translates node targets on kind
+        seen_k8s: list[list[str]] = []
+
+        async def fake_kubectl(args: list[str], timeout: float = 20, stdin_data=None) -> ProcResult:
+            seen_k8s.append(args)
+            if args[:2] == ["get", "deployment"]:
+                return ProcResult(0, "cka-worker2", "")
+            return ProcResult(0, "", "")
+
+        monkeypatch.setattr("app.cluster.kubectl", fake_kubectl)
+        asyncio.run(commands.run_tool_command("kubectl taint nodes node02 cka-arena/practice=critical:NoSchedule --overwrite"))
+        assert seen_k8s[-1][:3] == ["taint", "nodes", "cka-worker2"]
+
+        # 2) ScenarioEngine translates nodeSelector hostname in setup & solution manifests
+        engine = ScenarioEngine()
+        env = ScenarioEnvelope.model_validate({
+            "schema_version": "1.2",
+            "id": "test-taint",
+            "title": "Schedule on node02",
+            "domain": "Workloads & Scheduling",
+            "difficulty": "exam_standard",
+            "weight": 4,
+            "prompt": "Schedule Pod on node02",
+            "setup": {
+                "namespaces": ["ns-taint"],
+                "manifests": [
+                    "apiVersion: v1\nkind: Pod\nmetadata:\n  name: p\nspec:\n  nodeSelector:\n    kubernetes.io/hostname: node02\n  containers:\n  - name: c\n    image: nginx:1.27-alpine\n"
+                ],
+            },
+            "checks": [
+                {"id": "c1", "description": "ok", "type": "node_status_ready", "params": {"node_name": "node01"}}
+            ],
+            "solution": {
+                "manifests": [
+                    "apiVersion: v1\nkind: Pod\nmetadata:\n  name: p\nspec:\n  nodeName: node02\n  containers:\n  - name: c\n    image: nginx:1.27-alpine\n"
+                ],
+                "commands": [],
+            },
+            "cleanup": {"namespaces": ["ns-taint"], "commands": []},
+        })
+        labeled = engine._labeled_manifests(env)
+        assert labeled[0]["spec"]["nodeSelector"]["kubernetes.io/hostname"] == "cka-worker2"
+        rendered_sol = engine.render_manifests_payload(env.solution.manifests)
+        assert "nodeName: cka-worker2" in rendered_sol
+
+        # 3) Validator resolves logical node01 -> cka-worker and helm KUBECONFIG
+        async def fake_get_nodes(*, timeout: float = 15):
+            return [
+                {"name": "cka-control-plane", "ready": True, "internal_ip": "172.18.0.2"},
+                {"name": "cka-worker", "ready": True, "internal_ip": "172.18.0.3"},
+                {"name": "cka-worker2", "ready": True, "internal_ip": "172.18.0.4"},
+            ]
+
+        monkeypatch.setattr("app.cluster.get_nodes", fake_get_nodes)
+        status, _ev = asyncio.run(validator.chk_node_status_ready({"node_name": "node01"}))
+        assert status == validator.PASS
+        status_jp, _ = asyncio.run(validator.chk_kubectl_jsonpath({
+            "kind": "deployment",
+            "name": "web",
+            "namespace": "ns",
+            "jsonpath": "{.spec.template.spec.nodeSelector}",
+            "operator": "equals",
+            "expected": "node02",
+        }))
+        assert status_jp == validator.PASS
+
+        helm_seen: dict = {}
+
+        async def fake_helm_local(cmd: list[str], *, timeout: float = 20, stdin_data=None, env=None):
+            helm_seen["cmd"] = cmd
+            helm_seen["env"] = env
+            return ProcResult(0, json.dumps([{"name": "app", "status": "deployed", "revision": "2"}]), "")
+
+        monkeypatch.setattr(validator, "run_local", fake_helm_local)
+        h_status, _ = asyncio.run(validator.chk_helm_release_state({"namespace": "default", "release_name": "app"}))
+        assert h_status == validator.PASS
+        assert helm_seen["env"]["KUBECONFIG"] == str(cka_dir / "kubeconfig")
+
+        # 4) Doctor health matches kind real node names & calico network policy
+        async def fake_docker(args: list[str], timeout: float = 20):
+            if args[0] == "inspect":
+                return ProcResult(0, "true", "")
+            if args[0] == "exec" and "kubectl" not in args:
+                return ProcResult(0, "yes", "")
+            return ProcResult(0, "", "")
+
+        monkeypatch.setattr("app.provider.kind._docker", fake_docker)
+
+        async def fake_kubectl_doctor(args: list[str], timeout: float = 15, stdin_data=None):
+            if args[:2] == ["get", "nodes"]:
+                return ProcResult(0, json.dumps({
+                    "items": [
+                        {"metadata": {"name": n}, "status": {"addresses": [{"type": "InternalIP", "address": "172.18.0.2"}], "conditions": [{"type": "Ready", "status": "True"}]}}
+                        for n in ("cka-control-plane", "cka-worker", "cka-worker2")
+                    ]
+                }), "")
+            if args[:3] == ["get", "pods", "-n"]:
+                return ProcResult(0, json.dumps({
+                    "items": [{"metadata": {"name": "calico-node-abc"}, "status": {"containerStatuses": [{"name": "calico-node", "ready": True}]}}]
+                }), "")
+            if args[:2] == ["get", "apiservice"]:
+                return ProcResult(0, json.dumps({"status": {"conditions": [{"type": "Available", "status": "True"}]}}), "")
+            return ProcResult(0, "ok", "")
+
+        monkeypatch.setattr("app.cluster.kubectl", fake_kubectl_doctor)
+        doc_health = asyncio.run(ClusterDoctor().health())
+        assert doc_health["nodes_ready"] == 3
+        netpol_state, _ = asyncio.run(ClusterDoctor()._network_policy_state())
+        assert netpol_state == "present"
+    finally:
+        provider.reset()
+
+
+def test_sync_cluster_profile_supports_kind_endpoint(tmp_path: Path, monkeypatch) -> None:
+    from fastapi.testclient import TestClient
+
+    from app import config, main, provider
+
+    cka_dir = tmp_path / "cka"
+    cka_dir.mkdir()
+    (cka_dir / "provider").write_text("kind\n")
+    monkeypatch.setattr(config, "CKA_DIR", cka_dir)
+    monkeypatch.delenv("CKA_PROVIDER", raising=False)
+    provider.reset()
+
+    async def fake_sync() -> dict[str, bool]:
+        return {"controlplane": True, "node01": True, "node02": True}
+
+    monkeypatch.setattr(main.setup_wire, "sync_kind_node_exam_profile", fake_sync)
+    try:
+        with TestClient(main.app) as client:
+            resp = client.post("/api/cluster/sync-profile")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["ok"] is True
+            assert data["nodes"]["controlplane"] is True
+    finally:
+        provider.reset()

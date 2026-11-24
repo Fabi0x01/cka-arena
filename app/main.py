@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app import bank, config, db, mastery, provider, ssh_runner, study, telemetry
+from app import bank, config, db, mastery, provider, setup_wire, ssh_runner, study, telemetry
 from app.cluster_lease import ClusterBusyError, ClusterLease
 from app.doctor import ClusterDoctor
 from app.events import EventBroker, sse_format
@@ -281,6 +281,9 @@ async def setup_ssh(body: SetupSshRequest | None = None):
 @app.post("/api/cluster/sync-profile")
 async def sync_cluster_profile():
     prov = provider.get()
+    if prov.name == "kind":
+        results = await setup_wire.sync_kind_node_exam_profile()
+        return {"ok": any(results.values()), "nodes": results}
     nodes = await prov.nodes()
     ips = {name: info.ip for name, info in nodes.items() if info.ip}
     if not ips:
