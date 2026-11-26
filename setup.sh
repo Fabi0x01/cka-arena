@@ -22,6 +22,7 @@ WITH_ADDONS=1
 ONLY_STEP=""
 PROVIDER=""
 PROVIDER_FLAG=""
+FORCE_RESTART=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -31,6 +32,7 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] || { printf '✖ --provider requires a value (multipass or kind)\n' >&2; exit 1; }
       PROVIDER_FLAG="$2"; shift ;;
     --skip-cluster) SKIP_CLUSTER=1 ;;
+    --restart) FORCE_RESTART=1 ;;
     --bridge)
       [ $# -ge 2 ] || { printf '✖ --bridge requires a value\n' >&2; exit 1; }
       BRIDGE_IFACE="$2"; shift ;;
@@ -50,6 +52,7 @@ CKA Arena setup
   --check               audit only (no installs, no changes); exit 1 if something is missing
   --provider NAME       multipass (macOS/Linux VMs) or kind (WSL2 / Linux+Docker)
   --skip-cluster        you already have a cluster wired to ~/.cka-arena/kubeconfig
+  --restart             force restarting the platform server even if a session is active
   --bridge IFACE        network interface for Multipass bridged mode (auto-detected)
   --llm-config PATH     copy this LLM provider config to ./llm_config.json
   --with-addons         install metrics-server / Gateway API / local-path (default)
@@ -648,7 +651,11 @@ run_addons() {
 # ---------------------------------------------------------------- seeds
 run_seeds() {
   step "Seeding the question bank & initializing database"
-  spinner_start "restoring portable backup (if fresh) + publishing seeds…"
+  if [ -f "$SCRIPT_DIR/data/cka_arena.db" ]; then
+    spinner_start "syncing schema & publishing seeds (existing DB preserved)…"
+  else
+    spinner_start "restoring portable backup (fresh install) + publishing seeds…"
+  fi
   if uv run python -m app.seed >>"$CKA_SETUP_LOG" 2>&1; then
     local count
     count="$(uv run python -c "from app import bank, db; db.init_db(); print(bank.count_published())" 2>/dev/null || echo '?')"
@@ -664,11 +671,47 @@ SERVER_URL="http://127.0.0.1:8765"
 
 server_healthy() { curl -fsS --max-time 2 "$SERVER_URL/api/health" >/dev/null 2>&1; }
 
+_server_has_active_session() {
+  local raw
+  raw="$(curl -fsS --max-time 2 "$SERVER_URL/api/sessions/active" 2>/dev/null || true)"
+  [ -n "$raw" ] || return 1
+  printf '%s' "$raw" | uv run python -c "import json, sys; data = json.load(sys.stdin); sys.exit(0 if data.get('active') else 1)" 2>/dev/null
+}
+
+_stop_running_server() {
+  local pids="" pid_file="$CKA_DIR/server.pid" w=0
+  if [ -f "$pid_file" ]; then
+    pids="$(cat "$pid_file" 2>/dev/null || true)"
+  fi
+  if has_cmd lsof; then
+    pids="${pids} $(lsof -tiTCP:8765 -sTCP:LISTEN 2>/dev/null || true)"
+  fi
+  for pid in $pids; do
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && kill "$pid" 2>/dev/null || true
+  done
+  while [ "$w" -lt 10 ]; do
+    server_healthy || break
+    sleep 0.5
+    w=$((w + 1))
+  done
+  if server_healthy && has_cmd lsof; then
+    for pid in $(lsof -tiTCP:8765 -sTCP:LISTEN 2>/dev/null || true); do
+      kill -9 "$pid" 2>/dev/null || true
+    done
+    sleep 0.5
+  fi
+}
+
 run_server() {
   step "Starting the platform"
   if server_healthy; then
-    step_done "server already running at $SERVER_URL"
-    return 0
+    if [ "$FORCE_RESTART" != "1" ] && _server_has_active_session; then
+      warn "active exam/practice session detected at $SERVER_URL — keeping running server (pass --restart to force)"
+      return 0
+    fi
+    spinner_start "restarting running server to load latest code & config…"
+    _stop_running_server
+    spinner_stop "previous server stopped"
   fi
   spinner_start "starting server…"
   if [ "$PROVIDER" = "kind" ] && [ "${USE_SG_DOCKER:-0}" = "1" ]; then

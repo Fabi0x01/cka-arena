@@ -38,7 +38,7 @@ ARCH_TOPICS: tuple[StudyTopic, ...] = (
             "`RoleBinding` -> `ClusterRole` grants ONLY the permissions within the `RoleBinding`'s `metadata.namespace`, letting teams reuse built-in roles like `view` or `edit` per namespace.",
             "`resourceNames` narrows rules to specific named objects (e.g., `[\"db-creds\"]` Secret), though `list` and `watch` cannot filter by `resourceNames` reliably on older paths — `get`/`update` works cleanly.",
             "Built-in user-facing ClusterRoles: `view` (read most), `edit` (read/write apps), `admin` (manage namespace + Roles), `cluster-admin` (super-user); labels `rbac.authorization.k8s.io/aggregate-to-edit: \"true\"` extend aggregated ClusterRoles automatically.",
-            "Modern Pods automatically get bound ServiceAccount tokens via projected volumes (`/var/run/secrets/kubernetes.io/serviceaccount/token`); set `automountServiceAccountToken: false` on sensitive Pods/SAs when API access is unnecessary.",
+            "Modern Pods automatically get bound ServiceAccount tokens via projected volumes (`/var/run/secrets/kubernetes.io/serviceaccount/token`); issue ad-hoc bound short-lived tokens with `k -n <ns> create token <sa> --duration=1h` instead of legacy long-lived Secret tokens, and set `automountServiceAccountToken: false` on sensitive Pods/SAs when API access is unnecessary.",
             "Always prove BOTH positive and negative bounds with `k auth can-i <verb> <resource> --as=system:serviceaccount:<ns>:<sa>` (and `User` / `--as-group` for X.509 users).",
         ),
         decision_matrix=(
@@ -110,6 +110,7 @@ ARCH_TOPICS: tuple[StudyTopic, ...] = (
             CheatItem("ClusterRoleBinding", "k create clusterrolebinding <crb> --clusterrole=<cr> --serviceaccount=<ns>:<sa>", "Cluster-wide grant"),
             CheatItem("Check SA permission", "k auth can-i <verb> <res> -n <ns> --as=system:serviceaccount:<ns>:<sa>", "Returns yes or no"),
             CheatItem("Check User permission", "k auth can-i get pods -n <ns> --as=<user> --as-group=<group>", "Tests X.509 user/group RBAC"),
+            CheatItem("Short-lived SA token", "k -n <ns> create token <sa> --duration=1h", "Bound projected TokenRequest token (v1.24+)"),
         ),
         yaml_template=(
             "apiVersion: rbac.authorization.k8s.io/v1\n"
@@ -246,10 +247,18 @@ ARCH_TOPICS: tuple[StudyTopic, ...] = (
             CheatItem("Cleanup failed init", "sudo kubeadm reset -f && sudo rm -rf /etc/cni/net.d", "Clean slate before re-running init"),
         ),
         yaml_template=(
-            "# /etc/sysctl.d/k8s.conf (required kernel parameters):\n"
+            "# /etc/modules-load.d/k8s.conf\n"
+            "overlay\n"
+            "br_netfilter\n\n"
+            "# /etc/sysctl.d/k8s.conf\n"
             "net.bridge.bridge-nf-call-iptables  = 1\n"
             "net.bridge.bridge-nf-call-ip6tables = 1\n"
-            "net.ipv4.ip_forward                 = 1"
+            "net.ipv4.ip_forward                 = 1\n\n"
+            "# /etc/containerd/config.toml (cri plugin section)\n"
+            "[plugins.\"io.containerd.grpc.v1.cri\".containerd.runtimes.runc.options]\n"
+            "  SystemdCgroup = true\n\n"
+            "# Bootstrap primary controlplane:\n"
+            "# sudo kubeadm init --pod-network-cidr=192.168.0.0/16 --cri-socket=unix:///run/containerd/containerd.sock"
         ),
         quizzes=(
             RecallQuiz(
@@ -380,11 +389,21 @@ ARCH_TOPICS: tuple[StudyTopic, ...] = (
             CheatItem("Check static containers", "sudo crictl ps -a | grep -E 'etcd|kube-apiserver'", "Verify clean restart without CrashLoop"),
         ),
         yaml_template=(
-            "volumes:\n"
-            "- hostPath:\n"
-            "    path: /var/lib/etcd-restored\n"
-            "    type: DirectoryOrCreate\n"
-            "  name: etcd-data"
+            "# /etc/kubernetes/manifests/etcd.yaml (critical fields to inspect/swap)\n"
+            "spec:\n"
+            "  containers:\n"
+            "  - command:\n"
+            "    - etcd\n"
+            "    - --data-dir=/var/lib/etcd-restored   # update only if mountPath changed\n"
+            "    - --listen-client-urls=https://127.0.0.1:2379,https://10.0.0.10:2379\n"
+            "    volumeMounts:\n"
+            "    - mountPath: /var/lib/etcd            # keep container mountPath synced with --data-dir\n"
+            "      name: etcd-data\n"
+            "  volumes:\n"
+            "  - hostPath:\n"
+            "      path: /var/lib/etcd-restored          # point hostPath to clean offline restore dir\n"
+            "      type: DirectoryOrCreate\n"
+            "    name: etcd-data"
         ),
         quizzes=(
             RecallQuiz(
@@ -443,8 +462,8 @@ ARCH_TOPICS: tuple[StudyTopic, ...] = (
             "1. k drain <node> -> 2. apt unhold & upgrade kubeadm -> 3. kubeadm upgrade [plan + apply vX.Y.Z | node] -> 4. upgrade kubelet + kubectl -> 5. daemon-reload + restart kubelet -> 6. k uncordon"
         ),
         theory_points=(
-            "Never skip a minor release (`1.31 -> 1.32 -> 1.33`); on Ubuntu/Debian switching minor versions requires updating `/etc/apt/sources.list.d/kubernetes.list` (`pkgs.k8s.io/core:/stable:/v1.XX/deb/`) before `apt-get update`.",
-            "Always upgrade the FIRST controlplane node before secondary controlplanes or workers; controlplane runs `kubeadm upgrade apply vX.Y.Z`, whereas workers and extra controlplanes run `kubeadm upgrade node`.",
+            "Never skip a minor release (`1.33 -> 1.34 -> 1.35`); on Ubuntu/Debian switching minor versions requires updating `/etc/apt/sources.list.d/kubernetes.list` (`pkgs.k8s.io/core:/stable:/v1.XX/deb/`) before `apt-get update`.",
+            "Always upgrade the FIRST controlplane node before secondary controlplanes or workers; controlplane runs `kubeadm upgrade apply vX.Y.Z` (preview first with `kubeadm upgrade plan` / `diff`), whereas workers and extra controlplanes run `kubeadm upgrade node`.",
             "`kubectl drain` refuses Pods managed by DaemonSets (add `--ignore-daemonsets`) or local emptyDir volumes (add `--delete-emptydir-data`).",
             "Active `PodDisruptionBudgets` (PDBs) can stall `kubectl drain` cleanly by design — inspect `k get pdb -A` if drain hangs rather than blindly passing `--force` unless losing an unmanaged Pod.",
             "Remember `apt-mark hold kubeadm kubelet kubectl` after installing pinned packages (`=1.X.Y-*`) so unattended upgrades never drift cluster versions.",
@@ -478,20 +497,20 @@ ARCH_TOPICS: tuple[StudyTopic, ...] = (
             PracticeStep(
                 title="Upgrade kubeadm, check plan, and upgrade cluster/node config",
                 explanation="Inspect exact available version via `apt-cache madison kubeadm`; swap repo `/v1.XX/` if upgrading minor versions.",
-                command="sudo apt-mark unhold kubeadm && sudo apt-get update && sudo apt-get install -y kubeadm=1.32.0-* && sudo kubeadm upgrade node",
+                command="sudo apt-mark unhold kubeadm && sudo apt-get update && sudo apt-get install -y kubeadm=1.34.0-* && sudo kubeadm upgrade node",
                 verify_command="kubeadm version -o short && sudo kubelet --version",
-                expected_output="Updated kubeadm version matches target `v1.32.x`",
+                expected_output="Updated kubeadm version matches target `v1.34.x`",
             ),
             PracticeStep(
                 title="Upgrade kubelet + kubectl, restart systemd, and uncordon",
                 explanation="Re-hold packages cleanly, reload systemd daemon, restart kubelet, then allow scheduling again.",
-                command="sudo apt-mark unhold kubelet kubectl && sudo apt-get install -y kubelet=1.32.0-* kubectl=1.32.0-* && sudo apt-mark hold kubeadm kubelet kubectl && sudo systemctl daemon-reload && sudo systemctl restart kubelet",
+                command="sudo apt-mark unhold kubelet kubectl && sudo apt-get install -y kubelet=1.34.0-* kubectl=1.34.0-* && sudo apt-mark hold kubeadm kubelet kubectl && sudo systemctl daemon-reload && sudo systemctl restart kubelet",
                 verify_command="k uncordon node01 && k get nodes",
                 expected_output="STATUS is `Ready` and VERSION reflects upgraded kubelet",
             ),
         ),
         debug_playbook=(
-            DebugRow("`apt-cache madison kubeadm` lacks target minor `1.XX`", "Apt source file still points to older `/core:/stable:/v1.(X-1)/deb/`", "Run `sed -i 's/v1.31/v1.32/g' /etc/apt/sources.list.d/kubernetes.list && apt-get update`"),
+            DebugRow("`apt-cache madison kubeadm` lacks target minor `1.XX`", "Apt source file still points to older `/core:/stable:/v1.(X-1)/deb/`", "Run `sed -i 's/v1.33/v1.34/g' /etc/apt/sources.list.d/kubernetes.list && apt-get update`"),
             DebugRow("`kubectl drain` errors on DaemonSet or `local storage`", "DaemonSets and `emptyDir` Pods block default drain safety checks", "Pass `--ignore-daemonsets` and `--delete-emptydir-data`"),
             DebugRow("`kubectl get nodes` shows old `kubeletVersion` after `upgrade node`", "Forgot to upgrade `kubelet` package or forgot `systemctl restart kubelet`", "Install matching `kubelet=1.X.Y-*`, run `daemon-reload && restart kubelet`"),
         ),
@@ -501,33 +520,42 @@ ARCH_TOPICS: tuple[StudyTopic, ...] = (
         cheatsheet=(
             CheatItem("Drain node safely", "k drain <node> --ignore-daemonsets --delete-emptydir-data", "Cordon + safe Pod eviction"),
             CheatItem("List apt versions", "sudo apt-cache madison kubeadm | head", "Confirm exact `1.X.Y-*` package string"),
-            CheatItem("Switch apt minor repo", "sudo sed -i 's/v1.31/v1.32/g' /etc/apt/sources.list.d/kubernetes.list", "Required when crossing minor releases"),
+            CheatItem("Switch apt minor repo", "sudo sed -i 's/v1.33/v1.34/g' /etc/apt/sources.list.d/kubernetes.list", "Required when crossing minor releases"),
             CheatItem("Controlplane upgrade", "sudo kubeadm upgrade plan && sudo kubeadm upgrade apply v1.X.Y", "First controlplane node only"),
             CheatItem("Worker/extra CP upgrade", "sudo kubeadm upgrade node", "Run after upgrading kubeadm on workers"),
             CheatItem("Restart kubelet & restore", "sudo systemctl daemon-reload && sudo systemctl restart kubelet && k uncordon <node>", "Finalizes node upgrade"),
         ),
         yaml_template=(
-            "# Fast cluster node version + status audit:\n"
-            "k get nodes -o custom-columns=NAME:.metadata.name,STATUS:.status.conditions[-1].type,SCHED:.spec.unschedulable,KUBELET:.status.nodeInfo.kubeletVersion"
+            "# Canonical kubeadm minor upgrade sequence (e.g. v1.33 -> v1.34)\n"
+            "# 1. On workstation: drain target node safely\n"
+            "kubectl drain controlplane --ignore-daemonsets --delete-emptydir-data\n\n"
+            "# 2. On node: switch minor channel + upgrade kubeadm + upgrade cluster/node\n"
+            "sudo sed -i 's/v1.33/v1.34/g' /etc/apt/sources.list.d/kubernetes.list\n"
+            "sudo apt-mark unhold kubeadm && sudo apt-get update && sudo apt-get install -y kubeadm=1.34.0-*\n"
+            "sudo kubeadm upgrade plan && sudo kubeadm upgrade apply v1.34.0   # CP1 only (workers run: kubeadm upgrade node)\n\n"
+            "# 3. Upgrade kubelet + kubectl, restart daemon, uncordon, and verify\n"
+            "sudo apt-mark unhold kubelet kubectl && sudo apt-get install -y kubelet=1.34.0-* kubectl=1.34.0-*\n"
+            "sudo apt-mark hold kubeadm kubelet kubectl && sudo systemctl daemon-reload && sudo systemctl restart kubelet\n"
+            "kubectl uncordon controlplane && kubectl get nodes -o wide"
         ),
         quizzes=(
             RecallQuiz(
                 tag="Architecture",
-                question="Before upgrading `kubeadm` packages from `v1.31.x` to `v1.32.x` on Ubuntu using the Kubernetes community pkgs.k8s.io repo, what prerequisite step makes `1.32` packages visible to apt?",
+                question="Before upgrading `kubeadm` packages from `v1.33.x` to `v1.34.x` on Ubuntu using the Kubernetes community pkgs.k8s.io repo, what prerequisite step makes `1.34` packages visible to apt?",
                 choices=(
                     "Run `kubectl uncordon controlplane`",
-                    "Update the repository path inside `/etc/apt/sources.list.d/kubernetes.list` from `v1.31` to `v1.32` and run `apt-get update`",
+                    "Update the repository path inside `/etc/apt/sources.list.d/kubernetes.list` from `v1.33` to `v1.34` and run `apt-get update`",
                     "Delete `/etc/kubernetes/admin.conf`",
                     "Set `ETCDCTL_API=3` in bashrc",
                 ),
                 correct_index=1,
-                explanation="`pkgs.k8s.io` splits each Kubernetes minor version into its own apt channel (`/v1.31/`, `/v1.32/`), so `sources.list.d` must point to the target minor channel.",
+                explanation="`pkgs.k8s.io` splits each Kubernetes minor version into its own apt channel (`/v1.33/`, `/v1.34/`), so `sources.list.d` must point to the target minor channel.",
             ),
             RecallQuiz(
                 tag="CLI & YAML",
                 question="Which command upgrades local kubelet configuration on a WORKER node after installing the new `kubeadm` package?",
                 choices=(
-                    "sudo kubeadm upgrade apply v1.32.0",
+                    "sudo kubeadm upgrade apply v1.34.0",
                     "sudo kubeadm upgrade node",
                     "sudo kubectl upgrade node01",
                     "sudo kubeadm init phase kubelet-start",
@@ -777,8 +805,22 @@ ARCH_TOPICS: tuple[StudyTopic, ...] = (
             CheatItem("Inspect any field offline", "k explain <kind>.spec --recursive | grep -C3 <term>", "Faster than docs search"),
         ),
         yaml_template=(
-            "# Export user-scoped minified kubeconfig (keeps certs with --raw):\n"
-            "k --context=<ctx> config view --minify --raw > /tmp/ctx-only.kubeconfig"
+            "# Minimal kubeconfig anatomy (Cluster + User + Context)\n"
+            "apiVersion: v1\n"
+            "kind: Config\n"
+            "current-context: dev@prod-cluster\n"
+            "clusters:\n"
+            "- name: prod-cluster\n"
+            "  cluster:\n"
+            "    certificate-authority-data: <base64-ca>\n"
+            "    server: https://10.0.0.10:6443\n"
+            "contexts:\n"
+            "- name: dev@prod-cluster\n"
+            "  context: { cluster: prod-cluster, namespace: apps, user: dev-user }\n"
+            "users:\n"
+            "- name: dev-user\n"
+            "  user: { client-certificate-data: <b64>, client-key-data: <b64> }\n"
+            "# Export isolated file cleanly: k --context=dev@prod-cluster config view --minify --raw > /tmp/dev.cfg"
         ),
         quizzes=(
             RecallQuiz(
@@ -901,11 +943,18 @@ ARCH_TOPICS: tuple[StudyTopic, ...] = (
             CheatItem("Rollback release", "helm rollback <rel> <rev> -n <ns>", "Use 0 for immediate prior revision"),
         ),
         yaml_template=(
-            "# values-override.yaml:\n"
+            "# values-override.yaml (apply with: helm upgrade --install web repo/chart -n web -f values-override.yaml)\n"
             "replicaCount: 2\n"
             "image:\n"
             "  repository: nginx\n"
-            "  tag: 1.27-alpine"
+            "  tag: 1.27-alpine\n"
+            "service:\n"
+            "  type: ClusterIP\n"
+            "  port: 80\n"
+            "resources:\n"
+            "  requests: { cpu: 50m, memory: 64Mi }\n"
+            "  limits:   { cpu: 200m, memory: 128Mi }\n"
+            "# Render w/ CRDs before install: helm template web repo/chart -n web --include-crds -f values-override.yaml"
         ),
         quizzes=(
             RecallQuiz(
@@ -1033,12 +1082,20 @@ ARCH_TOPICS: tuple[StudyTopic, ...] = (
             CheatItem("Preview diff", "k diff -k <overlay-dir>", "Shows exact live cluster delta"),
         ),
         yaml_template=(
+            "# overlays/prod/kustomization.yaml\n"
             "apiVersion: kustomize.config.k8s.io/v1beta1\n"
             "kind: Kustomization\n"
+            "namespace: prod\n"
+            "namePrefix: prod-\n"
             "resources:\n"
             "- ../../base\n"
+            "configMapGenerator:\n"
+            "- name: app-env\n"
+            "  literals:\n"
+            "  - LOG_LEVEL=warn\n"
             "patches:\n"
-            "- path: replica-patch.yaml"
+            "- path: replica-patch.yaml\n"
+            "# Preview & apply: kubectl kustomize overlays/prod && kubectl apply -k overlays/prod"
         ),
         quizzes=(
             RecallQuiz(

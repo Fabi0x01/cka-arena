@@ -627,11 +627,15 @@ STORAGE_TS_TOPICS: tuple[StudyTopic, ...] = (
             CheatItem("Verify API health", "k get --raw='/readyz?verbose'", "Confirms etcd + apiserver health checks"),
         ),
         yaml_template=(
-            "# Safe static Pod edit loop on controlplane:\n"
-            "# 1. sudo cp /etc/kubernetes/manifests/<comp>.yaml /tmp/<comp>.bak\n"
-            "# 2. sudo crictl ps -a && sudo crictl logs <exited-id>\n"
-            "# 3. sudo vim /etc/kubernetes/manifests/<comp>.yaml\n"
-            "# 4. Wait ~15s -> k get nodes && k -n kube-system get pods"
+            "# Safe controlplane static Pod triage & recovery loop:\n"
+            "# 1. Back up manifest OUTSIDE /etc/kubernetes/manifests/ (never leave .bak inside!)\n"
+            "sudo cp /etc/kubernetes/manifests/kube-apiserver.yaml /tmp/kube-apiserver.yaml.bak\n\n"
+            "# 2. If API server is dead, inspect CRI runtime directly:\n"
+            "sudo crictl ps -a | grep -E 'kube-apiserver|kube-scheduler|kube-controller|etcd'\n"
+            "sudo crictl logs --tail=40 <exited-container-id>\n"
+            "sudo journalctl -u kubelet -n 30 --no-pager\n\n"
+            "# 3. Fix manifest flag/port/hostPath -> wait ~15s -> confirm API & core pods:\n"
+            "kubectl get --raw='/readyz?verbose' && kubectl -n kube-system get pods"
         ),
         quizzes=(
             RecallQuiz(
@@ -750,10 +754,17 @@ STORAGE_TS_TOPICS: tuple[StudyTopic, ...] = (
             CheatItem("Drop invalid command", "k -n <ns> patch deploy/<d> --type=json -p='[{\"op\":\"remove\",\"path\":\"/spec/template/spec/containers/0/command\"}]'", "Restores container ENTRYPOINT"),
         ),
         yaml_template=(
-            "# Exit Code Triage Card:\n"
-            "#   137 -> SIGKILL / OOMKilled (raise limits.memory or check livenessProbe)\n"
-            "#   127 -> command/file not found (fix spec.containers[].command / args)\n"
-            "#   1   -> application runtime failure (read logs --previous)"
+            "# Pod / Deployment Crash & OOM Triage Snippet\n"
+            "# Exit Codes: 137=OOMKilled/SIGKILL | 127=command/binary missing | 1=app runtime error\n"
+            "spec:\n"
+            "  containers:\n"
+            "  - name: app\n"
+            "    image: nginx:1.27-alpine\n"
+            "    imagePullPolicy: IfNotPresent\n"
+            "    resources:\n"
+            "      requests: { cpu: \"50m\", memory: \"64Mi\" }\n"
+            "      limits:   { cpu: \"200m\", memory: \"256Mi\" }\n"
+            "# Triage: kubectl -n <ns> describe pod <pod> && kubectl -n <ns> logs <pod> -c app --previous"
         ),
         quizzes=(
             RecallQuiz(
@@ -872,12 +883,23 @@ STORAGE_TS_TOPICS: tuple[StudyTopic, ...] = (
             CheatItem("Verify Ready + Endpoints", "k -n <ns> get pods,endpoints", "Confirms traffic readiness"),
         ),
         yaml_template=(
-            "readinessProbe:\n"
-            "  httpGet:\n"
-            "    path: /\n"
-            "    port: 80\n"
-            "  initialDelaySeconds: 2\n"
-            "  periodSeconds: 3"
+            "# Layered startup + readiness + liveness probes + safe envFrom pattern\n"
+            "spec:\n"
+            "  containers:\n"
+            "  - name: web\n"
+            "    image: nginx:1.27-alpine\n"
+            "    envFrom:\n"
+            "    - configMapRef: { name: web-config }\n"
+            "    startupProbe:\n"
+            "      httpGet: { path: /healthz, port: 80 }\n"
+            "      failureThreshold: 12\n"
+            "      periodSeconds: 5\n"
+            "    readinessProbe:\n"
+            "      httpGet: { path: /ready, port: 80 }\n"
+            "      periodSeconds: 3\n"
+            "    livenessProbe:\n"
+            "      httpGet: { path: /healthz, port: 80 }\n"
+            "      periodSeconds: 10"
         ),
         quizzes=(
             RecallQuiz(
@@ -1011,9 +1033,24 @@ STORAGE_TS_TOPICS: tuple[StudyTopic, ...] = (
             CheatItem("Clone crashed Pod w/ sh", "k -n <ns> debug <pod> -it --copy-to=dbg-pod --container=<ctr> -- sh", "Inspects CrashLoopBackOff filesystems"),
         ),
         yaml_template=(
-            "volumes:\n"
-            "- name: log-share\n"
-            "  emptyDir: {}"
+            "# Canonical CKA shared emptyDir sidecar logging Pod:\n"
+            "apiVersion: v1\n"
+            "kind: Pod\n"
+            "metadata:\n"
+            "  name: app-with-log-sidecar\n"
+            "spec:\n"
+            "  containers:\n"
+            "  - name: app\n"
+            "    image: busybox:1.36\n"
+            "    command: [\"sh\", \"-c\", \"while true; do date >> /var/log/app.log; sleep 5; done\"]\n"
+            "    volumeMounts: [{ name: log-share, mountPath: /var/log }]\n"
+            "  - name: sidecar\n"
+            "    image: busybox:1.36\n"
+            "    args: [\"/bin/sh\", \"-c\", \"tail -n+1 -F /var/log/app.log\"]\n"
+            "    volumeMounts: [{ name: log-share, mountPath: /var/log, readOnly: true }]\n"
+            "  volumes:\n"
+            "  - name: log-share\n"
+            "    emptyDir: {}"
         ),
         quizzes=(
             RecallQuiz(
@@ -1135,15 +1172,19 @@ STORAGE_TS_TOPICS: tuple[StudyTopic, ...] = (
             CheatItem("Locate kube-dns VIP", "k -n kube-system get svc,endpoints kube-dns", "Confirms DNS Service + Pods alive"),
             CheatItem("Full Service triage", "k -n <ns> describe svc <svc> && k -n <ns> get pods --show-labels", "Check Selector, Port, TargetPort, Endpoints"),
             CheatItem("HostNet cluster DNS fix", "spec.hostNetwork: true + spec.dnsPolicy: ClusterFirstWithHostNet", "Required for host-network Pods"),
+            CheatItem("Check EndpointSlices", "k -n <ns> get endpointslices -l kubernetes.io/service-name=<svc>", "v1.33+ primary ready backend view"),
             CheatItem("Test FQDN direct bypass", "k -n <ns> exec <pod> -- nslookup <svc>.<ns>.svc.cluster.local", "Bypasses search/ndots expansion"),
         ),
         yaml_template=(
+            "# Host-network Pod requiring internal ClusterIP/CoreDNS resolution:\n"
             "spec:\n"
-            "  dnsPolicy: ClusterFirst\n"
+            "  hostNetwork: true\n"
+            "  dnsPolicy: ClusterFirstWithHostNet\n"
             "  dnsConfig:\n"
             "    options:\n"
             "    - name: ndots\n"
-            "      value: \"2\""
+            "      value: \"2\"\n"
+            "# Service backend debug flow: Selector -> Pod labels -> containerPort -> EndpointSlice -> NetworkPolicy"
         ),
         quizzes=(
             RecallQuiz(
@@ -1263,11 +1304,16 @@ STORAGE_TS_TOPICS: tuple[StudyTopic, ...] = (
             CheatItem("Check kubelet API endpoint", "sudo grep 'server:' /etc/kubernetes/kubelet.conf", "Must point to real controlplane IP:6443"),
         ),
         yaml_template=(
-            "# Standard worker node troubleshooting files (Ubuntu + kubeadm):\n"
-            "#   /etc/systemd/system/kubelet.service.d/10-kubeadm.conf\n"
-            "#   /var/lib/kubelet/config.yaml\n"
-            "#   /etc/kubernetes/kubelet.conf\n"
-            "#   /etc/containerd/config.toml"
+            "# Node / kubelet troubleshooting checklist & config excerpt (/var/lib/kubelet/config.yaml):\n"
+            "apiVersion: kubelet.config.k8s.io/v1beta1\n"
+            "kind: KubeletConfiguration\n"
+            "cgroupDriver: systemd\n"
+            "staticPodPath: /etc/kubernetes/manifests\n"
+            "# Inspect & recover on node via SSH:\n"
+            "# 1. sudo systemctl status kubelet containerd --no-pager\n"
+            "# 2. sudo journalctl -u kubelet -n 50 --no-pager\n"
+            "# 3. sudo grep server: /etc/kubernetes/kubelet.conf\n"
+            "# 4. sudo systemctl daemon-reload && sudo systemctl enable --now kubelet && sudo systemctl restart kubelet"
         ),
         quizzes=(
             RecallQuiz(
@@ -1388,9 +1434,18 @@ STORAGE_TS_TOPICS: tuple[StudyTopic, ...] = (
             CheatItem("Prune unused images (DiskPressure)", "sudo crictl rmi --prune", "Frees node disk quickly"),
         ),
         yaml_template=(
-            "# Check /etc/crictl.yaml endpoint & validate YAML before kubelet loads it:\n"
-            "# runtime-endpoint: unix:///run/containerd/containerd.sock\n"
-            "# python3 -c \"import yaml; yaml.safe_load(open('/etc/kubernetes/manifests/app.yaml'))\""
+            "# Minimal static Pod manifest (/etc/kubernetes/manifests/web-static.yaml)\n"
+            "apiVersion: v1\n"
+            "kind: Pod\n"
+            "metadata:\n"
+            "  name: web-static\n"
+            "spec:\n"
+            "  containers:\n"
+            "  - name: web\n"
+            "    image: nginx:1.27-alpine\n"
+            "    ports: [{ containerPort: 80 }]\n"
+            "# /etc/crictl.yaml: runtime-endpoint: unix:///run/containerd/containerd.sock\n"
+            "# Validate YAML before kubelet loads: python3 -c \"import yaml; yaml.safe_load(open('/etc/kubernetes/manifests/web-static.yaml'))\""
         ),
         quizzes=(
             RecallQuiz(

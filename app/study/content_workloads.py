@@ -235,11 +235,20 @@ WORKLOAD_TOPICS: tuple[StudyTopic, ...] = (
             CheatItem("Verify landing nodes", "k get pods -o wide -n <ns>", "Checks scheduled `NODE` column"),
         ),
         yaml_template=(
+            "# Pod toleration + required NodeAffinity skeleton\n"
             "spec:\n"
             "  tolerations:\n"
             "  - key: \"node-role.kubernetes.io/control-plane\"\n"
             "    operator: \"Exists\"\n"
-            "    effect: \"NoSchedule\""
+            "    effect: \"NoSchedule\"\n"
+            "  affinity:\n"
+            "    nodeAffinity:\n"
+            "      requiredDuringSchedulingIgnoredDuringExecution:\n"
+            "        nodeSelectorTerms:\n"
+            "        - matchExpressions:\n"
+            "          - key: disktype\n"
+            "            operator: In\n"
+            "            values: [\"ssd\"]"
         ),
         quizzes=(
             RecallQuiz(
@@ -449,13 +458,14 @@ WORKLOAD_TOPICS: tuple[StudyTopic, ...] = (
             "Three QoS classes (auto-computed by Kubernetes from container specs, NOT manually configured): `Guaranteed` (EVERY container has CPU & Mem `requests == limits`), `Burstable` (at least one request/limit set without full equality), `BestEffort` (ZERO requests or limits on every container).",
             "Under node memory pressure (`kubelet` eviction / OOM), Kubernetes kills `BestEffort` Pods FIRST, then `Burstable` exceeding requests, and `Guaranteed` LAST.",
             "`kubectl top nodes` and `kubectl top pods -A --sort-by=cpu` (or `memory`) read from `metrics-server` via `metrics.k8s.io` API; check `metrics-server` Deployments/logs in `kube-system` if `Metrics API not available`.",
-            "**HPA vs VPA**: HPA scales **number of replicas** horizontally (`Deployment`/`StatefulSet`); VPA recommends or mutates **CPU/Mem requests & limits** per Pod vertically — NEVER attach both HPA and VPA targeting CPU/Mem simultaneously on the same Deployment without `Custom` metrics separation!",
+            "**HPA vs VPA**: HPA scales **number of replicas** horizontally (`Deployment`/`StatefulSet`); `VerticalPodAutoscaler` (`autoscaling.k8s.io/v1`) recommends (`updateMode: \"Off\"`) or mutates (`updateMode: \"Auto\"`/`\"Recreate\"`) **CPU/Mem requests & limits** per Pod via `resourcePolicy.containerPolicies` — NEVER attach HPA and VPA both targeting CPU/Mem on the same Deployment!",
         ),
         decision_matrix=(
             ComparisonRow("`Guaranteed` QoS", "Every container sets `cpu & memory` with `requests == limits`", "Critical stateful/database Pods needing maximum OOM protection"),
             ComparisonRow("`Burstable` QoS", "Some request/limit set (`requests < limits` or CPU-only)", "General web/worker apps wanting baseline + burst room"),
             ComparisonRow("`BestEffort` QoS", "Zero requests & limits anywhere in the Pod", "Dispensable scratch jobs — FIRST evicted under node pressure"),
-            ComparisonRow("HPA vs VPA", "HPA = more/fewer Pods; VPA = bigger/smaller containers", "HPA for stateless web pools; VPA for singletons/sizing baselines"),
+            ComparisonRow("`HorizontalPodAutoscaler`", "Scales `replicas` up/down on CPU, memory, or custom metrics", "Stateless web pools handling variable RPS"),
+            ComparisonRow("`VerticalPodAutoscaler`", "Sets `updateMode: Off` (recommend) or `Auto`/`Recreate` Pod sizing", "Right-sizing containers or inspecting `status.recommendation`"),
         ),
         docs_links=(
             StudyDocLink(
@@ -518,11 +528,23 @@ WORKLOAD_TOPICS: tuple[StudyTopic, ...] = (
             CheatItem("Print Pod QoS classes", "k get pods -A -o custom-columns=NS:.metadata.namespace,POD:.metadata.name,QOS:.status.qosClass", "Audits Guaranteed/Burstable/BestEffort"),
             CheatItem("Node Allocatable minus Used", "k describe nodes | grep -A6 'Allocated resources:'", "Verify scheduler CPU/Mem headroom"),
             CheatItem("Check Metrics API health", "k get apiservice v1beta1.metrics.k8s.io", "Confirms `Available: True`"),
+            CheatItem("Inspect VPA recommendations", "k -n <ns> describe vpa <name>", "Check Lower/Target/UpperBound CPU+Mem"),
+            CheatItem("Watch live HPA scaling", "k -n <ns> get hpa -w", "Tracks current vs target utilization %"),
         ),
         yaml_template=(
-            "# Division formula for CKA node-headroom sizing:\n"
-            "# Free_Mem = Node.Allocatable.memory - Node.AllocatedRequests.memory\n"
-            "# Per_Replica_Request <= (Free_Mem * 0.85) / target_replicas  (assign equal requests==limits for Guaranteed QoS)"
+            "# Headroom sizing: Free_Mem = Node.Allocatable - AllocatedRequests; Per_Pod <= (Free_Mem * 0.85) / replicas\n"
+            "# VerticalPodAutoscaler (autoscaling.k8s.io/v1) right-sizing template:\n"
+            "apiVersion: autoscaling.k8s.io/v1\n"
+            "kind: VerticalPodAutoscaler\n"
+            "metadata:\n"
+            "  name: api-vpa\n"
+            "spec:\n"
+            "  targetRef:\n"
+            "    apiVersion: apps/v1\n"
+            "    kind: Deployment\n"
+            "    name: api\n"
+            "  updatePolicy:\n"
+            "    updateMode: \"Off\"   # \"Off\"=recommend only | \"Auto\"=evict & resize | \"Initial\"=admission only"
         ),
         quizzes=(
             RecallQuiz(

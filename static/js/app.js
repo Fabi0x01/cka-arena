@@ -1,16 +1,16 @@
 // app.js — Orbital Control Console shell, rail navigation, View Transitions, Command Palette (⌘K), dialogs
-import { api, createEventBus } from "./api.js?v=4.0";
-import { el, toast, openDialog, closeDialog, wireDialogBackdropDismiss } from "./ui.js?v=4.0";
-import { iconEl } from "./icons.js?v=4.0";
-import { initPower } from "./power.js?v=4.0";
-import { initTerminal } from "./terminal.js?v=4.0";
-import { initWorkspace } from "./workspace.js?v=4.0";
-import { initStudio } from "./studio.js?v=4.0";
-import { initReadiness } from "./readiness.js?v=4.0";
-import { initStudy } from "./study.js?v=4.0";
-import { initSettings } from "./settings.js?v=4.0";
-import { initPalette } from "./palette.js?v=4.0";
-import { openExamReview } from "./review.js?v=4.0";
+import { api, createEventBus } from "./api.js?v=4.2";
+import { el, toast, openDialog, closeDialog, wireDialogBackdropDismiss } from "./ui.js?v=4.2";
+import { iconEl } from "./icons.js?v=4.2";
+import { initPower } from "./power.js?v=4.2";
+import { initTerminal } from "./terminal.js?v=4.2";
+import { initWorkspace } from "./workspace.js?v=4.2";
+import { initStudio } from "./studio.js?v=4.2";
+import { initReadiness } from "./readiness.js?v=4.2";
+import { initStudy } from "./study.js?v=4.2";
+import { initSettings } from "./settings.js?v=4.2";
+import { initPalette } from "./palette.js?v=4.2";
+import { openExamReview } from "./review.js?v=4.2";
 
 const bus = createEventBus();
 const state = { session: null, cluster: null, bank: null, panel: null };

@@ -92,8 +92,17 @@ async def tcp_open(host: str, port: int = 22, timeout: float = 1.5) -> bool:
 
 
 def bridge_ips(ips: list[str]) -> list[str]:
-    """Somente IPs da rede Bridged (NAT do Multipass é instável — nunca é usado)."""
-    return [ip for ip in ips if ip.startswith(config.BRIDGE_PREFIX)]
+    """Resolve bridged LAN IPs, preferring current BRIDGE_PREFIX and excluding NAT/CNI overlays."""
+    prefix = config.bridge_prefix()
+    matched = [ip for ip in ips if prefix and ip.startswith(prefix)]
+    if matched:
+        return matched
+    ignored_prefixes = ("127.", "10.32.", "10.38.", "10.40.", "10.44.", "10.46.", "10.244.", "169.254.")
+    nat_prefixes = ("192.168.64.", "192.168.252.")
+    return [
+        ip for ip in ips
+        if ip and not ip.startswith(ignored_prefixes) and not ip.startswith(nat_prefixes)
+    ]
 
 
 async def resolve_ip(ips: list[str], port: int = 22) -> str | None:

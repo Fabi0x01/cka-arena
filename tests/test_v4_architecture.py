@@ -727,3 +727,24 @@ def test_doctor_v4_and_backup_api(tmp_path, monkeypatch):
     assert r_cr.json()["ai_keys_included"] is False
     assert (tmp_path / "arena-backup.db").is_file()
     assert backup.status_report()["backup"]["exists"] is True
+
+
+def test_dynamic_bridge_prefix_and_bridge_ips_fallback(tmp_path, monkeypatch):
+    from app import ssh_runner
+
+    cka_dir = tmp_path / ".cka-arena"
+    cka_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(config, "CKA_DIR", cka_dir)
+    monkeypatch.delenv("CKA_BRIDGE_PREFIX", raising=False)
+    monkeypatch.setattr(config, "BRIDGE_PREFIX", "192.168.1.")
+
+    # Dynamically reads updated ~/.cka-arena/bridge_prefix at runtime
+    (cka_dir / "bridge_prefix").write_text("10.0.1.\n")
+    assert config.bridge_prefix() == "10.0.1."
+    assert ssh_runner.bridge_ips(["192.168.252.3", "10.0.1.50", "10.40.0.1"]) == ["10.0.1.50"]
+
+    # Subnet changed externally before bridge_prefix updated: falls back cleanly to non-NAT LAN, never []
+    (cka_dir / "bridge_prefix").write_text("192.168.99.")
+    assert ssh_runner.bridge_ips(["192.168.252.3", "192.168.1.123", "10.40.0.1"]) == ["192.168.1.123"]
+    # When only NAT + overlay exist, excludes NAT and overlay IPs
+    assert ssh_runner.bridge_ips(["192.168.252.3", "10.40.0.1", "127.0.0.1"]) == []

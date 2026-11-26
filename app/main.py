@@ -317,6 +317,7 @@ async def install_cluster_addons():
         "metrics_server": await addons_mod.install_metrics_server(),
         "gateway_api": await addons_mod.install_gateway(),
         "local_path_storage": await addons_mod.install_local_path(),
+        "etcdutl": await addons_mod.install_etcdutl(),
     }
     return {"ok": all(results.values()), "results": results}
 

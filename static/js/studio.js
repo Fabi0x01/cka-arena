@@ -526,7 +526,7 @@ export function initStudio({ bus, onSessionStarted, onBankChanged, openWorkspace
     const state = document.querySelector('input[name="bank-state"]:checked')?.value || "published";
     const query = el("bank-search")?.value.trim() || "";
     try {
-      const qs = new URLSearchParams({ state, limit: "60" });
+      const qs = new URLSearchParams({ state, limit: "200" });
       if (query) qs.set("q", query);
       const data = await api(`/api/bank/questions?${qs}`);
       el("cnt-published").textContent = String(data.counts?.published ?? 0);

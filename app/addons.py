@@ -109,6 +109,42 @@ async def install_local_path() -> bool:
     return True
 
 
+async def install_etcdutl(etcd_ver: str = "v3.5.17") -> bool:
+    """Install etcdutl on controlplane if absent (idempotent, works on Multipass & kind)."""
+    from app import provider
+
+    prov = provider.get()
+    try:
+        control = (await prov.nodes()).get("controlplane")
+    except Exception:
+        control = None
+    if not control or control.state != "Running":
+        log("etcdutl: controlplane not running — skipped")
+        return False
+
+    probe = await prov.exec("controlplane", "command -v etcdutl", timeout=8)
+    if probe.ok:
+        log("etcdutl: already present on controlplane")
+        return True
+
+    script = (
+        "set -e; "
+        "ARCH=$(uname -m); "
+        "case \"$ARCH\" in aarch64|arm64) E_ARCH=arm64;; x86_64|amd64) E_ARCH=amd64;; *) exit 1;; esac; "
+        f"URL=\"https://github.com/etcd-io/etcd/releases/download/{etcd_ver}/etcd-{etcd_ver}-linux-${{E_ARCH}}.tar.gz\"; "
+        "TMP=$(mktemp -d); trap 'rm -rf \"$TMP\"' EXIT; "
+        "curl -fsSL \"$URL\" -o \"$TMP/etcd.tgz\"; "
+        "tar -xzf \"$TMP/etcd.tgz\" -C \"$TMP\"; "
+        f"install -m 0755 \"$TMP/etcd-{etcd_ver}-linux-${{E_ARCH}}/etcdutl\" /usr/local/bin/etcdutl"
+    )
+    res = await prov.exec("controlplane", script, sudo=True, timeout=90)
+    if not res.ok:
+        log(f"etcdutl: install failed — {(res.err or res.out).strip()[:200]}")
+        return False
+    log(f"etcdutl: installed ({etcd_ver}) on controlplane")
+    return True
+
+
 async def main() -> int:
     if not await cluster.readyz():
         log("cluster API is not ready — cannot install addons")
@@ -117,6 +153,7 @@ async def main() -> int:
         await install_metrics_server(),
         await install_gateway(),
         await install_local_path(),
+        await install_etcdutl(),
     ]
     failed = sum(1 for ok in results if not ok)
     if failed:

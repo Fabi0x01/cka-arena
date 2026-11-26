@@ -11,10 +11,10 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="/static/css/tokens.css?v=4.0">
   <link rel="stylesheet" href="/static/css/base.css?v=4.0">
-  <link rel="stylesheet" href="/static/css/layout.css?v=4.0">
+  <link rel="stylesheet" href="/static/css/layout.css?v=4.2">
   <link rel="stylesheet" href="/static/css/components.css?v=4.0">
   <link rel="stylesheet" href="/static/vendor/xterm/xterm.css">
-  <link rel="stylesheet" href="/static/css/views.css?v=4.0">
+  <link rel="stylesheet" href="/static/css/views.css?v=4.2">
 </head>
 <body>
 <div class="app-shell">
@@ -312,53 +312,63 @@
 
     <div class="view-panel" id="view-study">
       <section class="bay-col study-nav-bay">
-        <div class="bay-scroll">
-          <div class="study-hud" id="study-hud">
-            <div class="row">Loading Study Codex…</div>
-          </div>
-
-          <div class="study-controls">
-            <div class="skill-toolbar-row" id="study-domains"></div>
-            <div class="skill-toolbar-row">
-              <div class="choice-row" id="study-status-filters">
-                <label class="choice"><input type="radio" name="study-status" value="all" checked> All</label>
-                <label class="choice"><input type="radio" name="study-status" value="remaining"> Remaining</label>
-                <label class="choice"><input type="radio" name="study-status" value="cleared"> Cleared</label>
-              </div>
-              <input class="input skill-search" id="study-search" placeholder="Search topics, kubectl, YAML…">
+        <div class="bay-scroll study-nav-scroll">
+          <div class="study-nav-top">
+            <header class="study-path-head">
+              <h1>Study Path</h1>
+              <span class="study-path-count" id="study-path-count"></span>
+            </header>
+            <div class="study-bar-track" id="study-path-bar" role="progressbar" aria-label="Topics cleared" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+              <div class="study-bar-fill" id="study-path-fill"></div>
+            </div>
+            <div class="study-filter-bar">
+              <input class="input study-search-input" id="study-search" type="search" placeholder="Filter topics, kubectl, YAML…" aria-label="Filter study topics">
+              <select class="input study-status-select" id="study-status-select" aria-label="Filter by completion status">
+                <option value="all">All</option>
+                <option value="remaining">To do</option>
+                <option value="cleared">Cleared</option>
+              </select>
             </div>
           </div>
 
           <div id="study-topic-list" class="study-topic-list">Loading curriculum…</div>
         </div>
+        <footer class="action-bar study-nav-foot">
+          <span class="study-foot-status" id="study-foot-status"></span>
+          <div class="grow"></div>
+          <button type="button" class="btn sm ghost" id="study-drill-btn" title="10-question active recall deck">Recall</button>
+          <button type="button" class="btn sm ghost" id="study-sprint-btn" title="Start a 15-minute focus sprint">Sprint</button>
+        </footer>
       </section>
 
       <section class="bay-col study-reader-bay">
         <div class="bay-scroll" id="study-reader-scroll">
-          <div id="study-reader" class="study-reader">
-            <div class="study-reader-head">
-              <div class="study-head-meta">
-                <span class="label" id="study-topic-meta">CKA STUDY CODEX</span>
-                <span class="badge accent" id="study-topic-xp">0 / 120 XP</span>
-              </div>
-              <div class="study-head-title-row">
-                <div>
-                  <h1 id="study-topic-title">Select a topic</h1>
-                  <p class="study-head-sub" id="study-topic-sub">Complete all 4 checkpoints (Concept, Practice, Cheat Sheet &amp; 3-Q Boss Gauntlet) to unlock 120 XP.</p>
-                </div>
-                <div class="pill-row">
-                  <button type="button" class="btn sm ghost" id="study-prev" disabled>← Prev</button>
-                  <button type="button" class="btn sm ghost" id="study-next" disabled>Next →</button>
+          <article class="study-reader" id="study-reader">
+            <header class="study-reader-head">
+              <div class="study-head-bar">
+                <p class="study-meta" id="study-topic-meta"></p>
+                <div class="study-nav-arrows">
+                  <button type="button" class="btn sm ghost study-arrow-btn" id="study-prev" aria-label="Previous topic" title="Previous topic ([)" disabled>←</button>
+                  <button type="button" class="btn sm ghost study-arrow-btn" id="study-next" aria-label="Next topic" title="Next topic (])" disabled>→</button>
                 </div>
               </div>
-              <div class="subtabs study-stage-tabs" id="study-stage-tabs"></div>
-            </div>
+              <div class="study-title-text">
+                <h1 id="study-topic-title">Select a topic</h1>
+                <p class="study-sub" id="study-topic-sub">Concept, cluster practice, cheat sheet, and verification quiz.</p>
+              </div>
+              <div class="study-stage-tabs" id="study-stage-tabs" role="tablist" focusgroup="tablist nomemory" aria-label="Topic stages" hidden></div>
+            </header>
 
-            <div id="study-stage-body" class="study-stage-body">
-              <div class="row" style="color:var(--ink-muted)">Loading topic…</div>
+            <div id="study-stage-body" class="study-stage-body" role="tabpanel">
+              <p class="study-empty">Loading topic…</p>
             </div>
-          </div>
+          </article>
         </div>
+        <footer class="action-bar study-reader-foot">
+          <div class="pill-row" id="study-foot-left"></div>
+          <div class="grow"></div>
+          <div id="study-foot-cta"></div>
+        </footer>
       </section>
     </div>
 
@@ -775,6 +785,6 @@
 
 <script src="/static/vendor/xterm/xterm.js"></script>
 <script src="/static/vendor/xterm/addon-fit.js"></script>
-<script type="module" src="/static/js/app.js?v=4.0"></script>
+<script type="module" src="/static/js/app.js?v=4.2"></script>
 </body>
 </html>

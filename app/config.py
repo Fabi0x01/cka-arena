@@ -61,6 +61,20 @@ SSH_CONNECT_TIMEOUT = 4
 SSH_EXEC_TIMEOUT = 20
 SSH_KEY_COMMENT = "cka-arena"
 
+
+def bridge_prefix() -> str:
+    """Resolve current bridged subnet prefix dynamically from env or ~/.cka-arena/bridge_prefix."""
+    explicit = os.environ.get("CKA_BRIDGE_PREFIX", "").strip()
+    if explicit:
+        return explicit
+    try:
+        stored = (CKA_DIR / "bridge_prefix").read_text().strip()
+        if stored:
+            return stored
+    except OSError:
+        pass
+    return BRIDGE_PREFIX
+
 # Comportamento (decisões D3)
 AUTO_START_ON_LAUNCH = os.environ.get("CKA_AUTO_START", "1") not in ("0", "false", "no")
 

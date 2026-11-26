@@ -290,6 +290,10 @@
     view-transition-name: main-surface;
   }
 
+  #view-study.view-panel.active {
+    grid-template-columns: clamp(280px, 27vw, 340px) minmax(0, 1fr);
+  }
+
   .view-head {
     margin-block-end: var(--sp-4);
   }
@@ -325,7 +329,8 @@
 
   @media (max-width: 1020px) {
     .workspace,
-    .view-panel.active {
+    .view-panel.active,
+    #view-study.view-panel.active {
       grid-template-columns: minmax(0, 1fr);
       grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
     }

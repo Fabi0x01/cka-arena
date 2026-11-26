@@ -94,10 +94,15 @@ NETWORK_TOPICS: tuple[StudyTopic, ...] = (
             CheatItem("Check kube-proxy mode", "k -n kube-system get cm kube-proxy -o yaml | grep mode:", "iptables | ipvs | nftables"),
         ),
         yaml_template=(
-            "# Pre-install checklist for ANY CKA CNI manifest:\n"
-            "# 1. Confirm `--cluster-cidr` in /etc/kubernetes/manifests/kube-controller-manager.yaml\n"
-            "# 2. Confirm CNI manifest CIDR matches (avoid overlapping host LAN or Service CIDR)\n"
-            "# 3. Watch `k -n kube-system get pods -w` until CNI + coredns reach Running 1/1"
+            "# CNI & kube-proxy pre-flight verification snippet:\n"
+            "# 1. Verify cluster-cidr in kube-controller-manager:\n"
+            "sudo grep cluster-cidr /etc/kubernetes/manifests/kube-controller-manager.yaml\n"
+            "# 2. Verify Calico custom IPPool aligns cleanly before applying:\n"
+            "#   cidr: 192.168.0.0/16   (must match --pod-network-cidr & stay disjoint from Service CIDR)\n"
+            "# 3. Inspect active CNI config + kube-proxy mode:\n"
+            "ls /etc/cni/net.d/ && kubectl -n kube-system get cm kube-proxy -o yaml | grep -E 'mode:|clusterCIDR'\n"
+            "# 4. Wait until CNI DaemonSet + coredns Pods are Running 1/1:\n"
+            "kubectl -n kube-system get pods -o wide"
         ),
         quizzes=(
             RecallQuiz(
@@ -160,7 +165,7 @@ NETWORK_TOPICS: tuple[StudyTopic, ...] = (
             "Distinguish all three ports: `port` (Service virtual port), `targetPort` (container port integer OR named port like `http`), and `nodePort` (`30000–32767` opened on node interfaces).",
             "`k expose deploy <d> --name=<svc> --port=80 --target-port=8080` copies the Deployment's exact selector labels safely; `k create svc nodeport` forces selector `app=<svc>` (watch out if labels say `tier=web`!).",
             "Service DNS resolves both `<svc>` (same namespace) and `<svc>.<ns>.svc.cluster.local` (cross-namespace); SRV records expose named ports too.",
-            "`EndpointSlices` scale large clusters cleanly (`< 100` endpoints/slice); Services with `publishNotReadyAddresses: true` expose Pod IPs even before Readiness passes (common in database quorum discovery).",
+            "`EndpointSlices` (`discovery.k8s.io/v1`) are the primary scalable backend API (`< 100` endpoints/slice), replacing the deprecated `v1 Endpoints` API (deprecated in Kubernetes v1.33+); Services with `publishNotReadyAddresses: true` expose Pod IPs even before Readiness passes (common in database quorum discovery).",
         ),
         decision_matrix=(
             ComparisonRow("`ClusterIP` (default)", "Internal cluster virtual IP reachable only inside cluster nodes/Pods", "East-west microservice communication"),
@@ -452,11 +457,13 @@ NETWORK_TOPICS: tuple[StudyTopic, ...] = (
             "Always inspect `k describe httproute <name>` Conditions: **`Accepted: True`** confirms parent Gateway accepted the route (host/allowedRoutes OK); **`ResolvedRefs: True`** confirms backend Services/ReferenceGrants resolve!",
             "Cross-namespace routing (`HTTPRoute` in ns `A` -> `Service` in ns `B`) ALWAYS fails with `ResolvedRefs: False (RefNotPermitted)` unless ns `B` contains a `ReferenceGrant` (`gateway.networking.k8s.io/v1beta1`).",
             "Note on local kubeadm labs without cloud LoadBalancers, `Gateway` `Accepted=True` and `HTTPRoute` `Accepted=True` verify routing correctness even if `Programmed` waits on external LB IP.",
+            "**Gateway TLS Termination vs `TLSRoute` Passthrough**: Terminate HTTPS on the `Gateway` listener (`tls.mode: Terminate` + `certificateRefs` Secret) for L7 `HTTPRoute` routing, or use `tls.mode: Passthrough` paired with a `TLSRoute` (`gateway.networking.k8s.io/v1alpha2` / `v1alpha3`) to forward encrypted SNI connections straight to backend Pods.",
         ),
         decision_matrix=(
             ComparisonRow("`GatewayClass`", "Cluster-scoped controller driver (e.g., `eg`, `cilium`, `nginx`)", "Checking which Gateway controller runs in the cluster"),
-            ComparisonRow("`Gateway`", "Opens listener ports (`80`/`443`), TLS certs, and `allowedRoutes` policy", "Infra listener entrypoint bound by HTTPRoutes"),
-            ComparisonRow("`HTTPRoute`", "Matches hostnames/paths/headers -> `backendRefs` services", "Application L7 HTTP routing rules"),
+            ComparisonRow("`Gateway`", "Opens listener ports (`80`/`443`), TLS certs (`Terminate`/`Passthrough`), and `allowedRoutes` policy", "Infra listener entrypoint bound by routes"),
+            ComparisonRow("`HTTPRoute`", "Matches hostnames/paths/headers -> `backendRefs` services", "Application L7 HTTP/HTTPS routing rules"),
+            ComparisonRow("`TLSRoute` (`Passthrough`)", "Matches SNI `hostnames` and proxies raw TLS directly to Pod", "End-to-end TLS where the backend app owns the cert"),
             ComparisonRow("`ReferenceGrant`", "Placed in TARGET Service namespace allowing cross-ns `HTTPRoute` refs", "Unlocking `RefNotPermitted` when route & Service live in separate namespaces"),
         ),
         docs_links=(
@@ -523,9 +530,11 @@ NETWORK_TOPICS: tuple[StudyTopic, ...] = (
             CheatItem("Inspect Gateway listeners", "k -n <ns> get gateway <gw> -o yaml", "Check listener names, port, TLS, allowedRoutes"),
             CheatItem("Verify HTTPRoute conditions", "k -n <ns> describe httproute <name>", "Check `Accepted=True` and `ResolvedRefs=True`"),
             CheatItem("Explain ReferenceGrant", "k explain referencegrant.spec", "Cross-namespace `from` & `to` rules"),
-            CheatItem("Check backend endpoints", "k -n <ns> get endpoints <svc>", "Missing Service/Endpoints breaks ResolvedRefs"),
+            CheatItem("Inspect TLSRoutes (SNI)", "k get tlsroute -A && k explain tlsroute.spec", "For `tls.mode: Passthrough` listeners"),
+            CheatItem("Check backend endpoints", "k -n <ns> get endpointslices -l kubernetes.io/service-name=<svc>", "Missing Service/Endpoints breaks ResolvedRefs"),
         ),
         yaml_template=(
+            "# ReferenceGrant (in target Service namespace) + Gateway TLS Terminate listener pattern\n"
             "apiVersion: gateway.networking.k8s.io/v1beta1\n"
             "kind: ReferenceGrant\n"
             "metadata:\n"
@@ -538,7 +547,8 @@ NETWORK_TOPICS: tuple[StudyTopic, ...] = (
             "    namespace: web\n"
             "  to:\n"
             "  - group: \"\"\n"
-            "    kind: Service"
+            "    kind: Service\n"
+            "# Gateway HTTPS listener: tls: { mode: Terminate, certificateRefs: [{ name: web-tls }] } (or Passthrough + TLSRoute)"
         ),
         quizzes=(
             RecallQuiz(
