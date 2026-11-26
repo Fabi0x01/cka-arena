@@ -10,7 +10,7 @@
   "difficulty": "exam_standard",
   "weight": 4,
   "estimated_minutes": 4,
-  "prompt": "The Pod of Deployment `web` in namespace `cka-ts-ready` stays `Running` but never becomes `Ready`: its readiness probe requests a path that the server answers with 404.\n\nPerform the following tasks:\n1. Fix the `readinessProbe` of Deployment `web` so its Pod becomes `Ready`.\n2. Keep the container image `nginx:1.27-alpine` unchanged.",
+  "prompt": "The Pod of Deployment `web` in namespace `cka-ts-ready` stays `Running` with `0/1 Ready`, so requests do not succeed.\n\nPerform the following tasks:\n1. Inspect and fix Deployment `web` so its Pod becomes `Running` and `Ready`.\n2. Keep the container image `nginx:1.27-alpine` unchanged.",
   "copy_tokens": [
     "web",
     "cka-ts-ready",
@@ -42,7 +42,8 @@
         "label_selector": "app=web",
         "min_ready": 1
       },
-      "failure_hint": "The probe path returns 404 \u2014 point it at a path nginx serves (e.g. /)."
+      "failure_hint": "The probe path returns 404 \u2014 point it at a path nginx serves (e.g. /).",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-image-kept",
@@ -56,7 +57,8 @@
         "operator": "equals",
         "expected": "nginx:1.27-alpine"
       },
-      "failure_hint": "Do not change the image; fix only the readiness probe."
+      "failure_hint": "Do not change the image; fix only the readiness probe.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-available",
@@ -70,7 +72,8 @@
         "operator": "gte",
         "expected": 1
       },
-      "failure_hint": "No replica is available until the readiness probe succeeds."
+      "failure_hint": "No replica is available until the readiness probe succeeds.",
+      "weight_ratio": 1.0
     }
   ],
   "solution": {

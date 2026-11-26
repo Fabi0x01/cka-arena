@@ -11,7 +11,7 @@ from app.seed import load_seeds
 
 def test_seeds_load_and_validate() -> None:
     seeds = load_seeds()
-    assert len(seeds) == 17
+    assert len(seeds) == 30
     domains = {env.domain for _path, env in seeds}
     assert domains == set(DOMAINS)
     ids = [env.id for _path, env in seeds]
@@ -19,8 +19,8 @@ def test_seeds_load_and_validate() -> None:
     for _path, env in seeds:
         assert env.prompt.strip()
         assert env.checks, f"{env.id} sem checks"
-        assert env.destructive is False
         assert env.solution.commands or env.solution.manifests or env.solution.node_commands
+    assert sum(1 for _p, env in seeds if env.destructive) == 3
 
 
 def test_envelope_rejects_unknown_domain() -> None:

@@ -20,7 +20,14 @@ class ClusterDoctor:
 
     async def health(self) -> dict:
         nodes = await cluster.get_nodes()
-        kubectl_ok = (await cluster.kubectl(["version", "--request-timeout=5s"], timeout=10)).ok
+        ver_res = await cluster.kubectl(["version", "-o", "json", "--request-timeout=5s"], timeout=10)
+        kubectl_ok = ver_res.ok
+        k8s_version: str | None = None
+        if ver_res.ok and ver_res.out:
+            try:
+                k8s_version = (json.loads(ver_res.out).get("serverVersion") or {}).get("gitVersion")
+            except ValueError:
+                k8s_version = None
         try:
             prov_nodes = await provider.get().nodes()
         except Exception:
@@ -57,6 +64,7 @@ class ClusterDoctor:
             "total_nodes": len(config.VM_NAMES),
             "nodes": node_rows,
             "kubectl_ok": kubectl_ok,
+            "k8s_version": k8s_version,
             "kubeconfig": str(config.KUBECONFIG_PATH),
             "addons": addons,
             "bootstrap_plan": bootstrap_plan,
@@ -76,6 +84,7 @@ class ClusterDoctor:
             {"name": "helm (host)", "status": "present" if shutil.which("helm") else "absent"},
         ]
         etcdctl = "unknown"
+        etcdutl = "unknown"
         try:
             control = (await provider.get().nodes()).get("controlplane")
         except Exception:
@@ -84,7 +93,11 @@ class ClusterDoctor:
             etcdctl = "present" if (await provider.get().exec(
                 "controlplane", "command -v etcdctl", timeout=8
             )).ok else "absent"
+            etcdutl = "present" if (await provider.get().exec(
+                "controlplane", "command -v etcdutl", timeout=8
+            )).ok else "absent"
         addons.append({"name": "etcdctl (controlplane)", "status": etcdctl})
+        addons.append({"name": "etcdutl (controlplane)", "status": etcdutl})
 
         addons.append({"name": "metrics-server", "status": await self._metrics_state()})
         npc_status, npc_detail = await self._network_policy_state()
@@ -213,7 +226,7 @@ echo BASELINE_OK
         return results
 
     async def snapshot_node_metadata(self) -> None:
-        """Capture baseline node taints so teardown can remove any scenario-added taints."""
+        """Capture baseline node taints, labels, and schedulability so teardown restores cleanly."""
         res = await cluster.kubectl(["get", "nodes", "-o", "json"], timeout=15)
         if not res.ok:
             return
@@ -223,19 +236,30 @@ echo BASELINE_OK
             return
         snapshot: dict[str, dict] = {}
         for item in items:
-            name = (item.get("metadata") or {}).get("name")
+            meta = item.get("metadata") or {}
+            name = meta.get("name")
             if not name:
                 continue
+            spec = item.get("spec") or {}
             taints = [
                 {
                     "key": t.get("key"),
                     "value": t.get("value"),
                     "effect": t.get("effect"),
                 }
-                for t in ((item.get("spec") or {}).get("taints") or [])
+                for t in (spec.get("taints") or [])
                 if t.get("key")
             ]
-            snapshot[name] = {"taints": taints}
+            labels = {
+                str(k): str(v)
+                for k, v in (meta.get("labels") or {}).items()
+                if k
+            }
+            snapshot[name] = {
+                "taints": taints,
+                "labels": labels,
+                "unschedulable": bool(spec.get("unschedulable")),
+            }
         try:
             config.BASELINE_NODES_PATH.parent.mkdir(parents=True, exist_ok=True)
             config.BASELINE_NODES_PATH.write_text(json.dumps(snapshot, indent=2))

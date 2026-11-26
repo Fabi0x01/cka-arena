@@ -12,7 +12,7 @@ export PATH="$PATH:$HOME/.local/bin:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/loca
 LOG="${CKA_SETUP_LOG:-$CKA_DIR/setup.log}"
 WEAVE_YAML="${WEAVE_YAML:-https://github.com/weaveworks/weave/releases/download/v2.8.1/weave-daemonset-k8s.yaml}"
 CALICO_YAML="${CALICO_YAML:-https://raw.githubusercontent.com/projectcalico/calico/v3.28.2/manifests/calico.yaml}"
-KIND_NODE_VER="${CKA_KIND_NODE_VER:-v1.31.2@sha256:18fbefc20a7113353c7b75b5c869d7145a6abd6269154825872dc59c1329912e}"
+KIND_NODE_VER="${CKA_KIND_NODE_VER:-v1.34.0}"
 KIND_MIRROR_IMAGE="mirror.gcr.io/kindest/node:${KIND_NODE_VER}"
 KIND_DOCKER_IMAGE="docker.io/kindest/node:${KIND_NODE_VER}"
 NODE_IMAGE=""
@@ -128,12 +128,12 @@ EOF
 }
 
 install_etcdctl_in_controlplane() {
-  local ctl_ctr arch tmp_dir url tarball etcd_ver="v3.5.16"
+  local ctl_ctr arch tmp_dir url tarball etcd_ver="v3.5.17"
   ctl_ctr="${CLUSTER}-control-plane"
   if command -v jq >/dev/null 2>&1 && [ -r "$CKA_DIR/nodes.json" ]; then
     ctl_ctr="$(jq -r '.controlplane.container // "cka-control-plane"' "$CKA_DIR/nodes.json" 2>/dev/null || echo "${CLUSTER}-control-plane")"
   fi
-  if docker exec "$ctl_ctr" command -v etcdctl >/dev/null 2>&1; then
+  if docker exec "$ctl_ctr" sh -c 'command -v etcdctl >/dev/null 2>&1 && command -v etcdutl >/dev/null 2>&1'; then
     return 0
   fi
   case "$(uname -m)" in
@@ -164,6 +164,10 @@ install_etcdctl_in_controlplane() {
   if tar -xzf "$tarball" -C "$tmp_dir" >>"$LOG" 2>&1 && [ -f "${tmp_dir}/etcd-${etcd_ver}-linux-${arch}/etcdctl" ]; then
     docker cp "${tmp_dir}/etcd-${etcd_ver}-linux-${arch}/etcdctl" "${ctl_ctr}:/usr/bin/etcdctl" >>"$LOG" 2>&1 || true
     docker exec "$ctl_ctr" chmod +x /usr/bin/etcdctl >>"$LOG" 2>&1 || true
+    if [ -f "${tmp_dir}/etcd-${etcd_ver}-linux-${arch}/etcdutl" ]; then
+      docker cp "${tmp_dir}/etcd-${etcd_ver}-linux-${arch}/etcdutl" "${ctl_ctr}:/usr/bin/etcdutl" >>"$LOG" 2>&1 || true
+      docker exec "$ctl_ctr" chmod +x /usr/bin/etcdutl >>"$LOG" 2>&1 || true
+    fi
   fi
   rm -rf "$tmp_dir"
 }

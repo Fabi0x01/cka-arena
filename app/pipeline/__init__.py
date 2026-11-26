@@ -29,7 +29,7 @@ from app.pipeline.orchestrator import (
     GenerationRequestModel,
     JobActiveError,
 )
-from app.pipeline.prober import ScenarioProber
+from app.pipeline.prober import ProbeOutcome, ScenarioProber
 from app.pipeline.prompts import (
     _HARD_EXAMPLE,
     BANDS,
@@ -67,6 +67,7 @@ __all__ = [
     "GenerationPipeline",
     "GenerationRequestModel",
     "JobActiveError",
+    "ProbeOutcome",
     "ScenarioProber",
     "archetype_alignment_errors",
     "band_text",

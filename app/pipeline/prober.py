@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import re
 import shlex
 import time
@@ -20,6 +21,15 @@ from app.scenario_engine import (
 )
 
 
+@dataclass
+class ProbeOutcome:
+    ok: bool
+    detail: str
+    kind: str
+    report: dict | None = None
+    digest: dict | None = None
+
+
 class ScenarioProber:
     def __init__(self, engine: ScenarioEngine) -> None:
         self.engine = engine
@@ -28,19 +38,46 @@ class ScenarioProber:
         self.last_probe_report: dict | None = None
         self.last_probe_digest: dict | None = None
 
+    async def probe_detailed(
+        self,
+        env: ScenarioEnvelope,
+        *,
+        emit: Callable[[str], None] | None = None,
+    ) -> ProbeOutcome:
+        """Run isolated solvability probe returning a race-free ProbeOutcome."""
+        if not is_cluster_scoped(env) and env.setup.namespaces:
+            probe_env = clone_with_ephemeral_namespaces(env, uuid.uuid4().hex[:5])
+            async with self._ns_probe_sem:
+                return await self.probe_locked_detailed(probe_env, emit=emit)
+        async with self._probe_lock:
+            return await self.probe_locked_detailed(env, emit=emit)
+
     async def probe(
         self,
         env: ScenarioEnvelope,
         *,
         emit: Callable[[str], None] | None = None,
     ) -> tuple[bool, str, str]:
-        """Run isolated solvability probe (concurrent for pure namespace-scoped scenarios)."""
-        if not is_cluster_scoped(env) and env.setup.namespaces:
-            probe_env = clone_with_ephemeral_namespaces(env, uuid.uuid4().hex[:5])
-            async with self._ns_probe_sem:
-                return await self.probe_locked(probe_env, emit=emit)
-        async with self._probe_lock:
-            return await self.probe_locked(env, emit=emit)
+        out = await self.probe_detailed(env, emit=emit)
+        return out.ok, out.detail, out.kind
+
+    async def probe_retry_detailed(
+        self,
+        env: ScenarioEnvelope,
+        *,
+        emit: Callable[[str], None] | None = None,
+    ) -> ProbeOutcome:
+        out = await self.probe_detailed(env, emit=emit)
+        for infra_try in range(1, 4):
+            if out.ok or out.kind != "infra":
+                return out
+            if emit:
+                emit(
+                    f"probe infra error → retry {infra_try}/3 (cluster hiccup, not counted as a model error)"
+                )
+            await asyncio.sleep(3 * infra_try)
+            out = await self.probe_detailed(env, emit=emit)
+        return out
 
     async def probe_retry(
         self,
@@ -48,30 +85,24 @@ class ScenarioProber:
         *,
         emit: Callable[[str], None] | None = None,
     ) -> tuple[bool, str, str]:
-        ok, detail, kind = await self.probe(env, emit=emit)
-        for infra_try in range(1, 4):
-            if ok or kind != "infra":
-                return ok, detail, kind
-            if emit:
-                emit(
-                    f"probe infra error → retry {infra_try}/3 (cluster hiccup, not counted as a model error)"
-                )
-            await asyncio.sleep(3 * infra_try)
-            ok, detail, kind = await self.probe(env, emit=emit)
-        return ok, detail, kind
+        out = await self.probe_retry_detailed(env, emit=emit)
+        return out.ok, out.detail, out.kind
 
-    async def capture_digest(self, env: ScenarioEnvelope) -> None:
+    async def capture_digest(self, env: ScenarioEnvelope) -> dict:
+        digest: dict = {}
         if hasattr(self.engine, "namespace_digest") and env.setup.namespaces:
             try:
-                self.last_probe_digest = await self.engine.namespace_digest(env.setup.namespaces)
+                digest = await self.engine.namespace_digest(env.setup.namespaces)
             except Exception:
-                self.last_probe_digest = {}
+                digest = {}
+        self.last_probe_digest = digest
+        return digest
 
     async def _wait_nodes_ready_after_solution(self, env: ScenarioEnvelope) -> None:
         target_nodes = {
             nc.node
             for nc in env.solution.node_commands
-            if any(tok in nc.command for tok in ("kubelet", "containerd", "kubeadm", "systemctl start"))
+            if any(tok in nc.command for tok in ("kubelet", "containerd", "kubeadm", "systemctl start", "etcd"))
         }
         if not target_nodes:
             return
@@ -88,7 +119,7 @@ class ScenarioProber:
             res = await cluster.kubectl(
                 [
                     "get",
-                    "pv,clusterrole,clusterrolebinding",
+                    "pv,clusterrole,clusterrolebinding,sc,crd,priorityclass,csr",
                     "-l",
                     f"{SCENARIO_LABEL}={env.id}",
                     "-o",
@@ -105,12 +136,12 @@ class ScenarioProber:
             return f"post-cleanup leaked cluster-scoped resources for {env.id}: {', '.join(leftovers[:6])}"
         return ""
 
-    async def probe_locked(
+    async def probe_locked_detailed(
         self,
         env: ScenarioEnvelope,
         *,
         emit: Callable[[str], None] | None = None,
-    ) -> tuple[bool, str, str]:
+    ) -> ProbeOutcome:
         """Execute setup -> sanity-fail -> solution -> pass -> cleanup -> leak-check."""
         started = time.monotonic()
 
@@ -124,8 +155,8 @@ class ScenarioProber:
         async def run_checks_fast() -> dict:
             return await self.engine.run_checks(env, settle=False)
 
-        self.last_probe_report = None
-        self.last_probe_digest = None
+        local_report: dict | None = None
+        local_digest: dict | None = None
         needs_double_confirm = any(c.type in RUNTIME_CHECK_TYPES for c in env.checks)
 
         try:
@@ -149,21 +180,34 @@ class ScenarioProber:
                 sanity = await run_checks_fast()
 
             if sanity["infra_error"]:
+                local_report = sanity
                 self.last_probe_report = sanity
-                return (
+                return ProbeOutcome(
                     False,
                     "erro de infraestrutura durante o sanity check:\n" + self.failure_detail(sanity),
                     "infra",
+                    report=local_report,
                 )
             if sanity["all_passed"]:
-                await self.capture_digest(env)
-                return False, "sanity fail: all checks ALREADY PASSED right after setup", "content"
+                local_digest = await self.capture_digest(env)
+                return ProbeOutcome(
+                    False,
+                    "sanity fail: all checks ALREADY PASSED right after setup",
+                    "content",
+                    report=sanity,
+                    digest=local_digest,
+                )
 
             notify("applying reference solution on the cluster")
             apply_err = await self.apply_solution(env)
             if apply_err:
-                await self.capture_digest(env)
-                return False, f"solution apply failed: {apply_err}", "content"
+                local_digest = await self.capture_digest(env)
+                return ProbeOutcome(
+                    False,
+                    f"solution apply failed: {apply_err}",
+                    "content",
+                    digest=local_digest,
+                )
 
             await self._wait_nodes_ready_after_solution(env)
             await self.engine.settle(env.setup.namespaces, timeout_s=15)
@@ -206,25 +250,44 @@ class ScenarioProber:
                 final = await run_checks_fast()
 
             if final["infra_error"]:
+                local_report = final
                 self.last_probe_report = final
-                return (
+                return ProbeOutcome(
                     False,
                     "erro de infraestrutura ao validar a solução:\n" + self.failure_detail(final),
                     "infra",
+                    report=local_report,
                 )
             if not final["all_passed"]:
+                local_report = final
                 self.last_probe_report = final
-                await self.capture_digest(env)
-                return False, "solução não resolve os checks:\n" + self.failure_detail(final), "content"
+                local_digest = await self.capture_digest(env)
+                return ProbeOutcome(
+                    False,
+                    "solução não resolve os checks:\n" + self.failure_detail(final),
+                    "content",
+                    report=local_report,
+                    digest=local_digest,
+                )
 
             notify("solvability probe passed")
-            ok_result = (True, "sanity + solvability ok", "ok")
+            ok_outcome = ProbeOutcome(True, "sanity + solvability ok", "ok", report=final)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            err_lower = str(exc).lower()
+            content_hints = (
+                "is invalid",
+                "invalid value",
+                "strict decoding",
+                "validationerror",
+                "forbidden",
+                "immutable",
+                "must be less than",
+                "not found",
+                "no matches for kind",
+            )
             infra_hints = (
-                "apply do setup falhou",
-                "setup apply failed",
                 "ssh",
                 "timeout",
                 "connect",
@@ -232,10 +295,19 @@ class ScenarioProber:
                 "connection",
                 "dial tcp",
             )
-            kind = "infra" if any(h in str(exc).lower() for h in infra_hints) else "content"
+            if any(h in err_lower for h in content_hints):
+                kind = "content"
+            else:
+                kind = "infra" if any(h in err_lower for h in infra_hints) else "content"
             if kind == "content":
-                await self.capture_digest(env)
-            return False, f"probe error: {type(exc).__name__}: {str(exc)[:300]}", kind
+                local_digest = await self.capture_digest(env)
+            return ProbeOutcome(
+                False,
+                f"probe error: {type(exc).__name__}: {str(exc)[:300]}",
+                kind,
+                report=local_report,
+                digest=local_digest,
+            )
         finally:
             try:
                 await asyncio.shield(self.engine.cleanup(env))
@@ -244,8 +316,17 @@ class ScenarioProber:
 
         leak_err = await self._check_post_cleanup_leaks(env)
         if leak_err:
-            return False, leak_err, "content"
-        return ok_result
+            return ProbeOutcome(False, leak_err, "content", report=local_report)
+        return ok_outcome
+
+    async def probe_locked(
+        self,
+        env: ScenarioEnvelope,
+        *,
+        emit: Callable[[str], None] | None = None,
+    ) -> tuple[bool, str, str]:
+        out = await self.probe_locked_detailed(env, emit=emit)
+        return out.ok, out.detail, out.kind
 
     def failure_detail(self, report: dict) -> str:
         lines: list[str] = []
@@ -268,7 +349,7 @@ class ScenarioProber:
 
     async def apply_solution(self, env: ScenarioEnvelope) -> str:
         for node_cmd in env.solution.node_commands:
-            if "etcdctl" not in node_cmd.command:
+            if "etcdctl" not in node_cmd.command and "etcdutl" not in node_cmd.command:
                 res = await provider.get().exec(
                     node_cmd.node, node_cmd.command, sudo=node_cmd.sudo, timeout=60
                 )
@@ -277,6 +358,11 @@ class ScenarioProber:
                         f"node_command solução falhou em {node_cmd.node}: "
                         f"{(res.err or res.out).strip()[:200]}"
                     )
+        if env.solution.manifests:
+            payload = self.engine.render_manifests_payload(env.solution.manifests)
+            res = await cluster.kubectl(["apply", "-f", "-"], timeout=90, stdin_data=payload)
+            if not res.ok:
+                return (res.err or res.out).strip()[:300]
         for raw in env.solution.commands:
             if _references_missing_local_file(shlex.split(raw)):
                 return (
@@ -291,15 +377,10 @@ class ScenarioProber:
                 return str(exc)
             if not res.ok and not is_convergence_wait:
                 return f"{raw[:80]}: {(res.err or res.out).strip()[:200]}"
-        if env.solution.manifests:
-            payload = self.engine.render_manifests_payload(env.solution.manifests)
-            res = await cluster.kubectl(["apply", "-f", "-"], timeout=90, stdin_data=payload)
-            if not res.ok:
-                return (res.err or res.out).strip()[:300]
         for node_cmd in env.solution.node_commands:
-            if "etcdctl" in node_cmd.command:
+            if "etcdctl" in node_cmd.command or "etcdutl" in node_cmd.command:
                 res = await provider.get().exec(
-                    node_cmd.node, node_cmd.command, sudo=node_cmd.sudo, timeout=60
+                    node_cmd.node, node_cmd.command, sudo=node_cmd.sudo, timeout=120
                 )
                 if not res.ok:
                     return (

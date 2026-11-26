@@ -28,6 +28,19 @@ async def kubectl(
     return await _run(kubectl_cmd(args), timeout=timeout, stdin_data=stdin_data)
 
 
+async def current_context(*, timeout: float = 8) -> str | None:
+    """Return the active kubeconfig context name (used to verify student context switching)."""
+    cmd = ["kubectl"]
+    if config.KUBECONFIG_PATH.exists():
+        cmd += ["--kubeconfig", str(config.KUBECONFIG_PATH)]
+    cmd += ["config", "current-context"]
+    res = await _run(cmd, timeout=timeout)
+    if not res.ok:
+        return None
+    ctx = (res.out or "").strip()
+    return ctx or None
+
+
 async def readyz(*, timeout: float = 6) -> bool:
     res = await kubectl(["get", "--raw", "/readyz"], timeout=timeout)
     return res.ok and res.out.strip() == "ok"

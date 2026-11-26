@@ -38,20 +38,19 @@
         "command": "test -s /opt/backup/etcd.db && echo SNAPSHOT_OK",
         "stdout_contains": "SNAPSHOT_OK"
       },
-      "failure_hint": "Run etcdctl snapshot save with the certs under /etc/kubernetes/pki/etcd/."
+      "failure_hint": "Run etcdctl snapshot save with the certs under /etc/kubernetes/pki/etcd/.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-snapshot-content",
-      "description": "Snapshot file has content on `controlplane`",
-      "type": "host_file_contains",
+      "description": "Snapshot file `/opt/backup/etcd.db` passes etcd snapshot status verification on `controlplane`",
+      "type": "node_command_exit_zero",
       "params": {
-        "location": "controlplane",
-        "path": "/opt/backup/etcd.db",
-        "regex_patterns": [
-          "(?s).+"
-        ]
+        "node": "controlplane",
+        "command": "if command -v etcdutl >/dev/null 2>&1; then etcdutl snapshot status /opt/backup/etcd.db -w table; else ETCDCTL_API=3 etcdctl snapshot status /opt/backup/etcd.db -w table; fi"
       },
-      "failure_hint": "The snapshot file is missing or empty."
+      "failure_hint": "The snapshot file must be a valid etcd snapshot verified by etcdutl/etcdctl snapshot status.",
+      "weight_ratio": 1.0
     }
   ],
   "solution": {

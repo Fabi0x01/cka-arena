@@ -47,7 +47,8 @@
         "name": "deployer",
         "namespace": "cka-rbac"
       },
-      "failure_hint": "The ServiceAccount is provided by the scenario; do not delete it."
+      "failure_hint": "The ServiceAccount is provided by the scenario; do not delete it.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-can-get",
@@ -61,7 +62,8 @@
         "target_namespace": "cka-rbac",
         "expected_allowed": true
       },
-      "failure_hint": "Create a Role with `get` on `pods` and bind it to the ServiceAccount with a RoleBinding."
+      "failure_hint": "Create a Role with `get` on `pods` and bind it to the ServiceAccount with a RoleBinding.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-can-list",
@@ -75,7 +77,8 @@
         "target_namespace": "cka-rbac",
         "expected_allowed": true
       },
-      "failure_hint": "The Role must include the `list` verb on `pods`."
+      "failure_hint": "The Role must include the `list` verb on `pods`.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-cannot-delete",
@@ -89,7 +92,8 @@
         "target_namespace": "cka-rbac",
         "expected_allowed": false
       },
-      "failure_hint": "Grant only `get` and `list`; do not add `delete` to the Role."
+      "failure_hint": "Grant only `get` and `list`; do not add `delete` to the Role.",
+      "weight_ratio": 1.0
     }
   ],
   "solution": {

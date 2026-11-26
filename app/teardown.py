@@ -10,7 +10,22 @@ from app.models import ScenarioEnvelope
 from app.scenario_engine import MANAGED_LABEL, ScenarioEngine
 
 PROBE_LABEL = "cka-arena.io/probe=true"
-CLUSTER_SCOPED_KINDS = ("clusterrole", "clusterrolebinding", "pv")
+CLUSTER_SCOPED_KINDS = (
+    "clusterrole",
+    "clusterrolebinding",
+    "pv",
+    "sc",
+    "crd",
+    "priorityclass",
+    "csr",
+)
+_SYSTEM_LABEL_PREFIXES = (
+    "kubernetes.io/",
+    "node-role.kubernetes.io/",
+    "beta.kubernetes.io/",
+    "node.kubernetes.io/",
+    "topology.kubernetes.io/",
+)
 
 
 class Teardown:
@@ -68,6 +83,7 @@ class Teardown:
             }
 
         drift = await self.drift()
+        await self._restore_node_taints()
         return {
             "level": "L1",
             "namespaces_deleted": deleted,
@@ -82,7 +98,7 @@ class Teardown:
         return await self.reset_clean()
 
     async def _restore_node_taints(self) -> None:
-        """Remove any taints added during scenarios compared against baseline_nodes.json."""
+        """Remove scenario taints, scenario node labels, and uncordon cordoned nodes vs baseline."""
         await cluster.kubectl(
             ["taint", "nodes", "--all", "cka-arena/practice=critical:NoSchedule-"],
             timeout=20,
@@ -103,21 +119,38 @@ class Teardown:
             return
 
         for item in items:
-            node_name = (item.get("metadata") or {}).get("name")
+            meta = item.get("metadata") or {}
+            node_name = meta.get("name")
             if not node_name:
                 continue
+            spec = item.get("spec") or {}
+            base_entry = baseline.get(node_name) or {}
             base_taints = {
                 (t.get("key"), t.get("effect"))
-                for t in (baseline.get(node_name, {}).get("taints") or [])
+                for t in (base_entry.get("taints") or [])
             }
-            for taint in ((item.get("spec") or {}).get("taints") or []):
+            for taint in (spec.get("taints") or []):
                 key = taint.get("key")
                 effect = taint.get("effect")
                 if not key:
                     continue
                 if key.startswith("cka-arena") or (baseline and (key, effect) not in base_taints):
-                    spec = f"{key}:{effect}-" if effect else f"{key}-"
-                    await cluster.kubectl(["taint", "node", node_name, spec], timeout=15)
+                    spec_str = f"{key}:{effect}-" if effect else f"{key}-"
+                    await cluster.kubectl(["taint", "node", node_name, spec_str], timeout=15)
+
+            if spec.get("unschedulable") and not base_entry.get("unschedulable"):
+                await cluster.kubectl(["uncordon", node_name], timeout=15)
+
+            base_labels = base_entry.get("labels") or {}
+            for lkey in (meta.get("labels") or {}):
+                is_arena = lkey.startswith("cka-arena")
+                is_extra_non_sys = (
+                    bool(base_labels)
+                    and lkey not in base_labels
+                    and not lkey.startswith(_SYSTEM_LABEL_PREFIXES)
+                )
+                if is_arena or is_extra_non_sys:
+                    await cluster.kubectl(["label", "node", node_name, f"{lkey}-"], timeout=15)
 
     async def reset_clean(self) -> dict:
         """Clean reset: L1 + restore baseline node files + restart containerd/kubelet + taints."""

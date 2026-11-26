@@ -1,0 +1,71 @@
+{
+  "schema_version": "1.2",
+  "id": "seed-wl-native-sidecar",
+  "title": "Add Native Sidecar InitContainer",
+  "domain": "Workloads & Scheduling",
+  "subtopics": ["initContainers", "sidecar", "emptyDir"],
+  "difficulty": "killer_hardcore",
+  "weight": 7,
+  "estimated_minutes": 6,
+  "prompt": "Deployment `web` in namespace `cka-sidecar` writes access logs to shared volume `/var/log/app` (`emptyDir`), and needs a Kubernetes native sidecar streaming helper alongside the main container.\n\nPerform the following tasks:\n1. Add a native sidecar `initContainer` named `log-shipper` (`image: busybox:1.36`, `restartPolicy: Always`) to Deployment `web` in namespace `cka-sidecar`.\n2. Mount volume `logs` at `/var/log/app` on `log-shipper` running `[\"sh\", \"-c\", \"tail -F /var/log/app/access.log\"]`.\n3. Ensure Deployment `web` rolls out cleanly with `1` ready replica.",
+  "copy_tokens": ["web", "cka-sidecar", "log-shipper", "restartPolicy: Always", "/var/log/app"],
+  "docs_links": [
+    {"label": "Sidecar Containers", "url": "https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/"}
+  ],
+  "hints": [
+    "A Kubernetes native sidecar is defined in `spec.template.spec.initContainers[]` with `restartPolicy: Always`.",
+    "Export Deployment YAML with `k -n cka-sidecar get deploy web -o yaml > deploy.yaml`, edit, and re-apply."
+  ],
+  "fast_solution_commands": [
+    "k -n cka-sidecar get deploy web -o yaml > deploy.yaml && k apply -f deploy.yaml"
+  ],
+  "setup": {
+    "namespaces": ["cka-sidecar"],
+    "manifests": [
+      "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: web-config\n  namespace: cka-sidecar\ndata:\n  log_path: /var/log/app/access.log\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n  namespace: cka-sidecar\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: web\n  template:\n    metadata:\n      labels:\n        app: web\n    spec:\n      volumes:\n      - name: logs\n        emptyDir: {}\n      containers:\n      - name: app\n        image: busybox:1.36\n        command: [\"sh\", \"-c\", \"touch /var/log/app/access.log && while true; do echo ok >> /var/log/app/access.log; sleep 2; done\"]\n        volumeMounts:\n        - name: logs\n          mountPath: /var/log/app\n"
+    ]
+  },
+  "checks": [
+    {
+      "id": "chk-init-restart-always",
+      "description": "initContainer `log-shipper` uses restartPolicy Always",
+      "type": "kubectl_jsonpath",
+      "params": {"kind": "deployment", "name": "web", "namespace": "cka-sidecar", "jsonpath": "{.spec.template.spec.initContainers[0].restartPolicy}", "operator": "equals", "expected": "Always"},
+      "weight_ratio": 1.0
+    },
+    {
+      "id": "chk-mount-path",
+      "description": "initContainer `log-shipper` mounts `/var/log/app`",
+      "type": "kubectl_jsonpath",
+      "params": {"kind": "deployment", "name": "web", "namespace": "cka-sidecar", "jsonpath": "{.spec.template.spec.initContainers[0].volumeMounts[0].mountPath}", "operator": "equals", "expected": "/var/log/app"},
+      "weight_ratio": 1.0
+    },
+    {
+      "id": "chk-init-name",
+      "description": "initContainer `log-shipper` is present",
+      "type": "kubectl_jsonpath",
+      "params": {"kind": "deployment", "name": "web", "namespace": "cka-sidecar", "jsonpath": "{.spec.template.spec.initContainers[0].name}", "operator": "equals", "expected": "log-shipper"},
+      "weight_ratio": 1.0
+    },
+    {
+      "id": "chk-rollout",
+      "description": "Deployment `web` is ready",
+      "type": "deployment_rollout_ready",
+      "params": {"namespace": "cka-sidecar", "name": "web", "min_ready_replicas": 1},
+      "weight_ratio": 1.0
+    }
+  ],
+  "solution": {
+    "manifests": [
+      "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n  namespace: cka-sidecar\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: web\n  template:\n    metadata:\n      labels:\n        app: web\n    spec:\n      volumes:\n      - name: logs\n        emptyDir: {}\n      initContainers:\n      - name: log-shipper\n        image: busybox:1.36\n        restartPolicy: Always\n        command: [\"sh\", \"-c\", \"touch /var/log/app/access.log && tail -F /var/log/app/access.log\"]\n        volumeMounts:\n        - name: logs\n          mountPath: /var/log/app\n      containers:\n      - name: app\n        image: busybox:1.36\n        command: [\"sh\", \"-c\", \"touch /var/log/app/access.log && while true; do echo ok >> /var/log/app/access.log; sleep 2; done\"]\n        volumeMounts:\n        - name: logs\n          mountPath: /var/log/app\n"
+    ],
+    "commands": []
+  },
+  "cleanup": {
+    "namespaces": ["cka-sidecar"]
+  },
+  "reference_solution": "Add `initContainers` entry `log-shipper` with `restartPolicy: Always` and matching `/var/log/app` mount.",
+  "destructive": false,
+  "archetype_id": "wl-native-sidecar",
+  "context_command": "kubectl config use-context cka"
+}

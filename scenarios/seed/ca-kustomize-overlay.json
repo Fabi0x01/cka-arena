@@ -1,0 +1,56 @@
+{
+  "schema_version": "1.2",
+  "id": "seed-ca-kustomize-overlay",
+  "title": "Deploy App via Kustomize Production Overlay",
+  "domain": "Cluster Architecture, Installation & Configuration",
+  "subtopics": ["Kustomize", "overlays", "Deployment", "Service"],
+  "difficulty": "exam_standard",
+  "weight": 5,
+  "estimated_minutes": 4,
+  "prompt": "A production Kustomize overlay exists locally at `assets/kustomize/overlays/prod`.\n\nPerform the following tasks:\n1. Inspect `assets/kustomize/overlays/prod` and apply the Kustomize overlay into namespace `cka-kust`.\n2. Ensure Deployment `web-app` reaches `2` ready replicas and Service `web-app` exposes healthy endpoints.",
+  "copy_tokens": ["assets/kustomize/overlays/prod", "cka-kust", "web-app"],
+  "docs_links": [
+    {"label": "Declarative Management Using Kustomize", "url": "https://kubernetes.io/docs/tasks/manage-kubernetes-objects/kustomization/"}
+  ],
+  "hints": [
+    "Preview rendered manifests first using `kubectl kustomize assets/kustomize/overlays/prod`.",
+    "Apply directly into `cka-kust` with `k apply -n cka-kust -k assets/kustomize/overlays/prod`."
+  ],
+  "fast_solution_commands": [
+    "k apply -n cka-kust -k assets/kustomize/overlays/prod"
+  ],
+  "setup": {
+    "namespaces": ["cka-kust"],
+    "manifests": []
+  },
+  "checks": [
+    {
+      "id": "chk-deploy-ready",
+      "description": "Deployment `web-app` in `cka-kust` has 2 ready replicas",
+      "type": "deployment_rollout_ready",
+      "params": {"namespace": "cka-kust", "name": "web-app", "min_ready_replicas": 2, "expected_image": "nginx:1.27-alpine"},
+      "weight_ratio": 1.0
+    },
+    {
+      "id": "chk-svc-ep",
+      "description": "Service `web-app` has at least 2 ready endpoints",
+      "type": "service_endpoints_ready",
+      "params": {"namespace": "cka-kust", "service_name": "web-app", "min_ready_addresses": 2},
+      "weight_ratio": 1.0
+    }
+  ],
+  "solution": {
+    "manifests": [],
+    "commands": [
+      "kubectl apply -n cka-kust -k assets/kustomize/overlays/prod",
+      "kubectl -n cka-kust rollout status deployment/web-app --timeout=60s"
+    ]
+  },
+  "cleanup": {
+    "namespaces": ["cka-kust"]
+  },
+  "reference_solution": "Apply the Kustomize production overlay into namespace `cka-kust` with `kubectl apply -n cka-kust -k assets/kustomize/overlays/prod`.",
+  "destructive": false,
+  "archetype_id": "ca-kustomize-overlay",
+  "context_command": "kubectl config use-context cka"
+}

@@ -1,0 +1,79 @@
+{
+  "schema_version": "1.2",
+  "id": "seed-wl-pdb-priorityclass",
+  "title": "Configure PriorityClass and PodDisruptionBudget",
+  "domain": "Workloads & Scheduling",
+  "subtopics": ["PriorityClass", "PodDisruptionBudget", "Scheduling"],
+  "difficulty": "killer_hardcore",
+  "weight": 7,
+  "estimated_minutes": 6,
+  "prompt": "Workload `payment-api` in namespace `cka-pdb` requires eviction protection during voluntary drains and high scheduling priority.\n\nPerform the following tasks:\n1. Create PriorityClass `pc-cka-pdb-high` with value `100000` (`globalDefault: false`).\n2. Update Deployment `payment-api` in namespace `cka-pdb` to use `priorityClassName: pc-cka-pdb-high` and maintain `2` ready replicas.\n3. Create PodDisruptionBudget `payment-api-pdb` in namespace `cka-pdb` protecting pods with `app=payment-api` (`minAvailable: 1`).",
+  "copy_tokens": ["payment-api", "cka-pdb", "pc-cka-pdb-high", "payment-api-pdb", "100000"],
+  "docs_links": [
+    {"label": "Specifying a Disruption Budget", "url": "https://kubernetes.io/docs/tasks/run-application/configure-pdb/"},
+    {"label": "Pod Priority and Preemption", "url": "https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/"}
+  ],
+  "hints": [
+    "PriorityClass is cluster-scoped: `k create priorityclass pc-cka-pdb-high --value=100000`.",
+    "Use `k -n cka-pdb create pdb payment-api-pdb --selector=app=payment-api --min-available=1` and patch Deployment `priorityClassName`."
+  ],
+  "fast_solution_commands": [
+    "k create priorityclass pc-cka-pdb-high --value=100000",
+    "k -n cka-pdb create pdb payment-api-pdb --selector=app=payment-api --min-available=1"
+  ],
+  "setup": {
+    "namespaces": ["cka-pdb"],
+    "manifests": [
+      "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: payment-api\n  namespace: cka-pdb\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: payment-api\n  template:\n    metadata:\n      labels:\n        app: payment-api\n    spec:\n      containers:\n      - name: app\n        image: nginx:1.27-alpine\n"
+    ]
+  },
+  "checks": [
+    {
+      "id": "chk-pc-val",
+      "description": "PriorityClass `pc-cka-pdb-high` has value `100000`",
+      "type": "kubectl_jsonpath",
+      "params": {"kind": "priorityclass", "name": "pc-cka-pdb-high", "jsonpath": "{.value}", "operator": "equals_int", "expected": 100000},
+      "weight_ratio": 1.0
+    },
+    {
+      "id": "chk-deploy-pc",
+      "description": "Deployment uses `pc-cka-pdb-high`",
+      "type": "kubectl_jsonpath",
+      "params": {"kind": "deployment", "name": "payment-api", "namespace": "cka-pdb", "jsonpath": "{.spec.template.spec.priorityClassName}", "operator": "equals", "expected": "pc-cka-pdb-high"},
+      "weight_ratio": 1.0
+    },
+    {
+      "id": "chk-deploy-ready",
+      "description": "Deployment `payment-api` has 2 ready replicas",
+      "type": "deployment_rollout_ready",
+      "params": {"namespace": "cka-pdb", "name": "payment-api", "min_ready_replicas": 2},
+      "weight_ratio": 1.0
+    },
+    {
+      "id": "chk-pdb",
+      "description": "PodDisruptionBudget `payment-api-pdb` sets minAvailable=1",
+      "type": "kubectl_jsonpath",
+      "params": {"kind": "pdb", "name": "payment-api-pdb", "namespace": "cka-pdb", "jsonpath": "{.spec.minAvailable}", "operator": "equals_int", "expected": 1},
+      "weight_ratio": 1.0
+    }
+  ],
+  "solution": {
+    "manifests": [
+      "apiVersion: scheduling.k8s.io/v1\nkind: PriorityClass\nmetadata:\n  name: pc-cka-pdb-high\nvalue: 100000\nglobalDefault: false\n",
+      "apiVersion: policy/v1\nkind: PodDisruptionBudget\nmetadata:\n  name: payment-api-pdb\n  namespace: cka-pdb\nspec:\n  minAvailable: 1\n  selector:\n    matchLabels:\n      app: payment-api\n"
+    ],
+    "commands": [
+      "kubectl -n cka-pdb patch deployment payment-api --type=merge -p '{\"spec\":{\"template\":{\"spec\":{\"priorityClassName\":\"pc-cka-pdb-high\"}}}}'"
+    ]
+  },
+  "cleanup": {
+    "namespaces": ["cka-pdb"],
+    "commands": [
+      "kubectl delete priorityclass pc-cka-pdb-high --ignore-not-found"
+    ]
+  },
+  "reference_solution": "Create PriorityClass `pc-cka-pdb-high`, patch Deployment `payment-api` to reference it, and create PodDisruptionBudget `payment-api-pdb`.",
+  "destructive": false,
+  "archetype_id": "wl-pdb-priorityclass",
+  "context_command": "kubectl config use-context cka"
+}

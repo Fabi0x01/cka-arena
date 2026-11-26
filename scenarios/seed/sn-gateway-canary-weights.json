@@ -1,0 +1,72 @@
+{
+  "schema_version": "1.2",
+  "id": "seed-sn-gateway-canary-weights",
+  "title": "Split Gateway Traffic 80/20 Across Services",
+  "domain": "Services & Networking",
+  "subtopics": ["Gateway API", "HTTPRoute", "Canary", "Traffic Splitting"],
+  "difficulty": "killer_hardcore",
+  "weight": 8,
+  "estimated_minutes": 6,
+  "prompt": "Namespace `cka-canary` serves Services `app-v1` and `app-v2` on port `80` behind an existing Gateway named `edge-canary` (`gatewayClassName: eg`).\n\nPerform the following tasks:\n1. Create `HTTPRoute` `canary-route` in namespace `cka-canary` attached to Gateway `edge-canary` for hostname `canary.cka.local`.\n2. Split HTTP traffic with weight `80` to `app-v1` (port `80`) and weight `20` to `app-v2` (port `80`).\n3. Verify HTTPRoute `canary-route` is Accepted and Service `app-v1` exposes active endpoints.",
+  "copy_tokens": ["cka-canary", "edge-canary", "canary-route", "canary.cka.local", "app-v1", "app-v2"],
+  "docs_links": [
+    {"label": "HTTP Traffic Splitting", "url": "https://gateway.networking.k8s.io/guides/traffic-splitting/"}
+  ],
+  "hints": [
+    "Place both `app-v1` and `app-v2` inside `rules[0].backendRefs` with explicit `weight: 80` and `weight: 20`.",
+    "Verify acceptance via `k -n cka-canary describe httproute canary-route`."
+  ],
+  "fast_solution_commands": [
+    "k -n cka-canary get gateway edge-canary",
+    "k -n cka-canary get svc app-v1 app-v2"
+  ],
+  "setup": {
+    "namespaces": ["cka-canary"],
+    "manifests": [
+      "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: app-v1\n  namespace: cka-canary\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: app-v1\n  template:\n    metadata:\n      labels:\n        app: app-v1\n    spec:\n      containers:\n      - name: web\n        image: nginx:1.27-alpine\n        ports:\n        - containerPort: 80\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: app-v2\n  namespace: cka-canary\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: app-v2\n  template:\n    metadata:\n      labels:\n        app: app-v2\n    spec:\n      containers:\n      - name: web\n        image: nginx:1.27-alpine\n        ports:\n        - containerPort: 80\n---\napiVersion: v1\nkind: Service\nmetadata:\n  name: app-v1\n  namespace: cka-canary\nspec:\n  selector:\n    app: app-v1\n  ports:\n  - port: 80\n    targetPort: 80\n---\napiVersion: v1\nkind: Service\nmetadata:\n  name: app-v2\n  namespace: cka-canary\nspec:\n  selector:\n    app: app-v2\n  ports:\n  - port: 80\n    targetPort: 80\n---\napiVersion: gateway.networking.k8s.io/v1\nkind: Gateway\nmetadata:\n  name: edge-canary\n  namespace: cka-canary\nspec:\n  gatewayClassName: eg\n  listeners:\n  - name: http\n    protocol: HTTP\n    port: 80\n    hostname: canary.cka.local\n    allowedRoutes:\n      namespaces:\n        from: Same\n"
+    ]
+  },
+  "checks": [
+    {
+      "id": "chk-route-accepted",
+      "description": "HTTPRoute `canary-route` is Accepted",
+      "type": "kubectl_jsonpath",
+      "params": {"kind": "httproute", "name": "canary-route", "namespace": "cka-canary", "jsonpath": "{.status.parents[0].conditions[?(@.type=='Accepted')].status}", "operator": "equals", "expected": "True"},
+      "weight_ratio": 1.0
+    },
+    {
+      "id": "chk-v1-weight",
+      "description": "Backend `app-v1` receives weight 80",
+      "type": "kubectl_jsonpath",
+      "params": {"kind": "httproute", "name": "canary-route", "namespace": "cka-canary", "jsonpath": "{.spec.rules[0].backendRefs[?(@.name=='app-v1')].weight}", "operator": "equals_int", "expected": 80},
+      "weight_ratio": 1.0
+    },
+    {
+      "id": "chk-v2-weight",
+      "description": "Backend `app-v2` receives weight 20",
+      "type": "kubectl_jsonpath",
+      "params": {"kind": "httproute", "name": "canary-route", "namespace": "cka-canary", "jsonpath": "{.spec.rules[0].backendRefs[?(@.name=='app-v2')].weight}", "operator": "equals_int", "expected": 20},
+      "weight_ratio": 1.0
+    },
+    {
+      "id": "chk-v1-ep",
+      "description": "Service `app-v1` exposes at least 1 ready endpoint",
+      "type": "service_endpoints_ready",
+      "params": {"namespace": "cka-canary", "service_name": "app-v1", "min_ready_addresses": 1},
+      "weight_ratio": 0.5
+    }
+  ],
+  "solution": {
+    "manifests": [
+      "apiVersion: gateway.networking.k8s.io/v1\nkind: HTTPRoute\nmetadata:\n  name: canary-route\n  namespace: cka-canary\nspec:\n  parentRefs:\n  - name: edge-canary\n  hostnames:\n  - canary.cka.local\n  rules:\n  - backendRefs:\n    - name: app-v1\n      port: 80\n      weight: 80\n    - name: app-v2\n      port: 80\n      weight: 20\n"
+    ],
+    "commands": []
+  },
+  "cleanup": {
+    "namespaces": ["cka-canary"]
+  },
+  "reference_solution": "Create `HTTPRoute` `canary-route` with `weight: 80` for `app-v1` and `weight: 20` for `app-v2`.",
+  "destructive": false,
+  "archetype_id": "sn-gateway-canary-weights",
+  "context_command": "kubectl config use-context cka"
+}

@@ -426,19 +426,31 @@ async def chk_node_status_ready(params: dict) -> tuple[str, dict]:
 
 async def chk_kubectl_auth_can_i(params: dict) -> tuple[str, dict]:
     verb, resource = params["verb"], params["resource"]
-    namespace = params["namespace"]
-    sa = params["service_account"]
-    target_ns = params.get("target_namespace") or namespace
+    namespace = params.get("namespace") or ""
+    sa = params.get("service_account")
+    user = params.get("user")
+    subresource = params.get("subresource")
+    cluster_scoped = bool(params.get("cluster_scoped"))
+    target_ns = "" if cluster_scoped else (params.get("target_namespace") or namespace)
     expected_allowed = bool(params.get("expected_allowed", True))
-    args = [
-        "auth", "can-i", verb, resource,
-        "--as", f"system:serviceaccount:{namespace}:{sa}",
-        "-n", target_ns,
-    ]
+    subject = str(user) if user else f"system:serviceaccount:{namespace}:{sa}"
+    args = ["auth", "can-i", verb, resource, "--as", subject]
+    if subresource:
+        args.append(f"--subresource={subresource}")
+    if target_ns:
+        args += ["-n", target_ns]
     res = await cluster.kubectl(args, timeout=10)
-    evidence = {"verb": verb, "resource": resource, "service_account": sa,
-                "namespace": namespace, "target_namespace": target_ns,
-                "expected_allowed": expected_allowed, "stdout": res.out.strip()}
+    evidence = {
+        "verb": verb,
+        "resource": resource,
+        "subject": subject,
+        "service_account": sa,
+        "namespace": namespace,
+        "target_namespace": target_ns or None,
+        "cluster_scoped": cluster_scoped,
+        "expected_allowed": expected_allowed,
+        "stdout": res.out.strip(),
+    }
     # `kubectl auth can-i` exits 1 when the answer is "no" — stdout carries the verdict.
     answer = res.out.strip().lower()
     if answer not in ("yes", "no"):
@@ -574,7 +586,10 @@ async def chk_service_endpoints_ready(params: dict) -> tuple[str, dict]:
             items = []
         for slice_obj in items:
             for ep in slice_obj.get("endpoints") or []:
-                if (ep.get("conditions") or {}).get("ready") is False:
+                cond = ep.get("conditions") or {}
+                if cond.get("ready") is False or cond.get("terminating") is True:
+                    continue
+                if cond and "ready" in cond and cond.get("ready") is not True:
                     continue
                 for addr in ep.get("addresses") or []:
                     ready_ips.add(str(addr))
@@ -619,16 +634,27 @@ async def chk_deployment_rollout_ready(params: dict) -> tuple[str, dict]:
     actual_image = containers[0].get("image") if containers else None
     gen = int(meta.get("generation") or 0)
     obs = int(status.get("observedGeneration") or 0)
+    updated_raw = status.get("updatedReplicas")
     ready_replicas = int(status.get("readyReplicas") or 0)
+    updated_replicas = int(updated_raw) if updated_raw is not None else ready_replicas
     available_replicas = int(status.get("availableReplicas") or 0)
+    unavailable_replicas = int(status.get("unavailableReplicas") or 0)
     evidence.update({
         "generation": gen,
         "observed_generation": obs,
+        "updated_replicas": updated_replicas,
         "ready": ready_replicas,
         "available_replicas": available_replicas,
+        "unavailable_replicas": unavailable_replicas,
         "actual_image": actual_image,
     })
-    ok = obs >= gen and ready_replicas >= min_ready and available_replicas >= min_ready
+    ok = (
+        obs >= gen
+        and updated_replicas >= min_ready
+        and ready_replicas >= min_ready
+        and available_replicas >= min_ready
+        and unavailable_replicas == 0
+    )
     if expected_image and actual_image != expected_image:
         ok = False
     return (PASS if ok else FAIL), evidence

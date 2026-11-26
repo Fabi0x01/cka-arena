@@ -603,7 +603,7 @@ def test_seeds_have_canonical_archetypes_and_hints() -> None:
     from app.seed import load_seeds
 
     seeds = load_seeds()
-    assert len(seeds) == 17
+    assert len(seeds) == 30
     for _path, env in seeds:
         assert env.schema_version == "1.2", env.id
         assert env.archetype_id in curriculum.ARCHETYPES_BY_ID, env.id

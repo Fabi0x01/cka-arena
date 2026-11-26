@@ -20,7 +20,7 @@ export function initSettings({ onPowerChanged }) {
         const row = document.createElement("div");
         row.className = "row";
         row.style.color = health.nodes_ready === health.total_nodes && health.kubectl_ok ? "var(--pass)" : "var(--warn)";
-        row.textContent = `${health.nodes_ready}/${health.total_nodes} nodes Ready · kubectl ${health.kubectl_ok ? "ok" : "unreachable"} · baseline files ${health.baseline_files ? "present" : "missing"}`;
+        row.textContent = `${health.nodes_ready}/${health.total_nodes} nodes Ready · K8s ${health.k8s_version || "?"} · kubectl ${health.kubectl_ok ? "ok" : "unreachable"} · baseline files ${health.baseline_files ? "present" : "missing"}`;
         summaryEl.appendChild(row);
       }
 
@@ -252,9 +252,63 @@ export function initSettings({ onPowerChanged }) {
     }
   };
 
-  async function refreshAll() {
-    await Promise.all([refreshHealth(), refreshLlm()]);
+  async function refreshBackup() {
+    const box = el("backup-status");
+    if (!box) return;
+    try {
+      const st = await api("/api/backup/status");
+      box.innerHTML = "";
+      const row = document.createElement("div");
+      row.className = "row";
+      if (st.backup?.exists) {
+        const kb = Math.round((st.backup.size_bytes || 0) / 1024);
+        const pub = st.backup.counts?.published_questions ?? "?";
+        const ts = st.manifest?.created_at_utc ? ` · ${st.manifest.created_at_utc}` : "";
+        row.textContent = `Snapshot ready (${kb} KB · ${pub} published questions${ts}) — API keys excluded`;
+      } else {
+        row.textContent = "No portable backup snapshot created yet.";
+      }
+      box.appendChild(row);
+    } catch (error) {
+      box.innerHTML = `<div class="row error">${error.message}</div>`;
+    }
   }
 
-  return { refreshAll, refreshHealth, refreshLlm };
+  el("btn-install-addons")?.addEventListener("click", async () => {
+    const btn = el("btn-install-addons");
+    btn.disabled = true;
+    btn.textContent = "Installing…";
+    try {
+      const res = await api("/api/cluster/install-addons", { method: "POST" });
+      toast(res.ok ? "Addons installed / verified" : "Some addons failed — check cluster logs", res.ok ? "success" : "warn");
+      await refreshHealth();
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Install missing addons";
+    }
+  });
+
+  el("btn-backup-create")?.addEventListener("click", async () => {
+    const btn = el("btn-backup-create");
+    btn.disabled = true;
+    btn.textContent = "Creating…";
+    try {
+      const meta = await api("/api/backup/create", { method: "POST" });
+      toast(`Backup saved (${Math.round((meta.size_bytes || 0) / 1024)} KB)`, "success");
+      await refreshBackup();
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Create backup snapshot";
+    }
+  });
+
+  async function refreshAll() {
+    await Promise.all([refreshHealth(), refreshLlm(), refreshBackup()]);
+  }
+
+  return { refreshAll, refreshHealth, refreshLlm, refreshBackup };
 }

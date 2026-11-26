@@ -55,6 +55,8 @@ class Archetype:
     required_kinds: tuple[str, ...] = ()
     required_check_types: tuple[str, ...] = ()
     required_keywords: tuple[str, ...] = ()
+    anti_patterns: tuple[str, ...] = ()
+    canonical_fast_commands: tuple[str, ...] = ()
 
 
 ARCHETYPES: tuple[Archetype, ...] = (
@@ -781,6 +783,108 @@ ARCHETYPES: tuple[Archetype, ...] = (
             "Validate via `deployment_rollout_ready`, `kubectl_jsonpath`, and `pod_exec_exit_zero` inspecting mounted secret permissions/content."
         ),
     ),
+    # ------------------------------------------------------------ Phase 4 High-Yield Expansion (+8 -> 67)
+    Archetype(
+        id="ca-kubeadm-node-drain",
+        domain="Cluster Architecture, Installation & Configuration",
+        subtopics=("drain", "cordon", "maintenance", "uncordon"),
+        difficulties=("exam_standard", "killer_hardcore"),
+        example_seed="ca-kubeadm-node-drain.json",
+        needs_node_ssh=True,
+        destructive=True,
+        required_kinds=("Deployment",),
+        required_keywords=("drain", "node02"),
+        guidance=(
+            "Opt-in maintenance lab: cordon and safely drain `node02` (--ignore-daemonsets --delete-emptydir-data) so Deployment workloads reschedule cleanly, "
+            "run a marker on `node02`, and uncordon `node02` back to Ready/schedulable."
+        ),
+    ),
+    Archetype(
+        id="ca-user-kubeconfig-context",
+        domain="Cluster Architecture, Installation & Configuration",
+        subtopics=("kubeconfig", "context", "auth", "RBAC"),
+        difficulties=("exam_standard", "killer_hardcore"),
+        example_seed="ca-csr-user-auth.json",
+        required_keywords=("kubeconfig", "context"),
+        guidance=(
+            "Create or inspect a ServiceAccount token / kubeconfig context with Role-scoped access and verify allowed and denied actions via `kubectl_auth_can_i`."
+        ),
+    ),
+    Archetype(
+        id="wl-pod-node-selector-hostname",
+        domain="Workloads & Scheduling",
+        subtopics=("nodeSelector", "scheduling", "Deployment"),
+        difficulties=("exam_standard",),
+        example_seed="wl-taint-toleration.json",
+        required_kinds=("Deployment",),
+        required_keywords=("nodeselector",),
+        guidance=(
+            "Schedule Pods of a Deployment onto a specific labeled worker node using `spec.template.spec.nodeSelector` and verify Pod placement via LIST `kubectl_jsonpath` `{.items[*].spec.nodeName}`."
+        ),
+    ),
+    Archetype(
+        id="wl-job-backoff-completions",
+        domain="Workloads & Scheduling",
+        subtopics=("Job", "completions", "parallelism", "backoffLimit"),
+        difficulties=("exam_standard", "killer_hardcore"),
+        example_seed="wl-cronjob-policy.json",
+        required_kinds=("Job",),
+        required_keywords=("job", "completions"),
+        guidance=(
+            "Create or fix a batch `Job` with explicit `completions`, `parallelism`, and `backoffLimit` and verify `status.succeeded`."
+        ),
+    ),
+    Archetype(
+        id="sn-gateway-tls-header-route",
+        domain="Services & Networking",
+        subtopics=("Gateway API", "HTTPRoute", "headers", "path"),
+        difficulties=("killer_hardcore",),
+        example_seed="sn-gateway-canary-weights.json",
+        requires_addons=("gateway",),
+        required_kinds=("HTTPRoute", "Service"),
+        required_keywords=("httproute",),
+        guidance=(
+            "Configure an `HTTPRoute` under an existing `Gateway` (`gatewayClassName: eg`) matching a path prefix or HTTP request header to route traffic to a backend Service."
+        ),
+    ),
+    Archetype(
+        id="sn-networkpolicy-egress-cidr",
+        domain="Services & Networking",
+        subtopics=("NetworkPolicy", "egress", "ipBlock", "DNS"),
+        difficulties=("killer_hardcore",),
+        example_seed="sn-networkpolicy-dns.json",
+        requires_addons=("network_policy",),
+        required_kinds=("NetworkPolicy",),
+        required_keywords=("networkpolicy", "egress"),
+        guidance=(
+            "Restrict Pod egress with a `NetworkPolicy` combining DNS (`kube-system` port 53) and explicit `ipBlock` CIDR or namespace/pod rules; validate with `pod_exec_exit_zero` and `pod_exec_must_fail`."
+        ),
+    ),
+    Archetype(
+        id="st-emptydir-shared-volume",
+        domain="Storage",
+        subtopics=("emptyDir", "multi-container", "volumes", "Shared"),
+        difficulties=("exam_standard",),
+        example_seed="st-pvc-local-path.json",
+        required_kinds=("Pod",),
+        required_keywords=("emptydir",),
+        guidance=(
+            "Create a multi-container Pod sharing an `emptyDir` volume where container 1 writes logs/data and container 2 reads/serves it; verify via `pod_exec_exit_zero`."
+        ),
+    ),
+    Archetype(
+        id="ts-pvc-pending-storageclass",
+        domain="Troubleshooting",
+        subtopics=("PersistentVolumeClaim", "StorageClass", "Pending", "troubleshooting"),
+        difficulties=("exam_standard", "killer_hardcore"),
+        example_seed="st-pvc-local-path.json",
+        requires_addons=("local-path",),
+        required_kinds=("PersistentVolumeClaim", "Deployment"),
+        required_keywords=("local-path", "pvc"),
+        guidance=(
+            "Troubleshoot a Pending Pod whose PVC references a nonexistent `StorageClass`; recreate the PVC with `local-path` and verify Pod Bound + Running."
+        ),
+    ),
 )
 
 ARCHETYPES_BY_ID: dict[str, Archetype] = {a.id: a for a in ARCHETYPES}
@@ -795,6 +899,9 @@ class CausalIncidentBlueprint:
     requires_addons: tuple[str, ...]
     guidance: str
     example_seed: str
+    primary_archetype_id: str | None = None
+    required_kinds: tuple[str, ...] = ()
+    required_check_types: tuple[str, ...] = ()
 
 
 CAUSAL_INCIDENTS: tuple[CausalIncidentBlueprint, ...] = (
@@ -805,6 +912,7 @@ CAUSAL_INCIDENTS: tuple[CausalIncidentBlueprint, ...] = (
         subtopics=("kubelet", "Service", "scheduling", "troubleshooting"),
         requires_addons=(),
         example_seed="ts-kubelet-node01.json",
+        primary_archetype_id="ts-kubelet-down",
         guidance=(
             "COHESIVE MULTI-LAYER INCIDENT in ONE business namespace `<ns>` + node `node01`: "
             "(1) `kubelet` on `node01` is stopped via setup.node_commands (`systemctl stop kubelet`), causing Pod of Deployment `api` (pinned to `node01` via nodeSelector) to remain Pending/Unscheduled; "
@@ -821,6 +929,7 @@ CAUSAL_INCIDENTS: tuple[CausalIncidentBlueprint, ...] = (
         subtopics=("kubelet", "NetworkPolicy", "DNS", "Service"),
         requires_addons=("network_policy",),
         example_seed="sn-networkpolicy-dns.json",
+        primary_archetype_id="sn-networkpolicy-dns",
         guidance=(
             "COHESIVE MULTI-LAYER INCIDENT in ONE business namespace `<ns>` + node `node02`: "
             "(1) `kubelet` on `node02` is stopped via setup.node_commands (`systemctl stop kubelet`), stalling `client` / `backend` Pods pinned to `node02`; "
@@ -836,6 +945,7 @@ CAUSAL_INCIDENTS: tuple[CausalIncidentBlueprint, ...] = (
         subtopics=("PersistentVolume", "PersistentVolumeClaim", "RBAC", "kubelet"),
         requires_addons=(),
         example_seed="st-pv-claimref.json",
+        primary_archetype_id="st-pv-claimref",
         guidance=(
             "COHESIVE MULTI-LAYER INCIDENT in ONE business namespace `<ns>` + node `node01`: "
             "(1) `kubelet` on `node01` is stopped via setup.node_commands (`systemctl stop kubelet`); "
@@ -851,6 +961,7 @@ CAUSAL_INCIDENTS: tuple[CausalIncidentBlueprint, ...] = (
         subtopics=("Helm", "Gateway API", "HTTPRoute", "kubelet"),
         requires_addons=("helm", "gateway"),
         example_seed="ca-helm-upgrade.json",
+        primary_archetype_id="ca-helm-upgrade",
         guidance=(
             "COHESIVE MULTI-LAYER INCIDENT in ONE business namespace `<ns>` + node `node01`: "
             "(1) `kubelet` on `node01` is stopped via setup.node_commands; "
@@ -866,6 +977,7 @@ CAUSAL_INCIDENTS: tuple[CausalIncidentBlueprint, ...] = (
         subtopics=("taints", "tolerations", "initContainers", "kubelet"),
         requires_addons=(),
         example_seed="wl-taint-toleration.json",
+        primary_archetype_id="wl-taint-toleration",
         guidance=(
             "COHESIVE MULTI-LAYER INCIDENT in ONE business namespace `<ns>` + node `node02`: "
             "(1) `kubelet` on `node02` is stopped via setup.node_commands AND `node02` has taint `cka-arena/<ns>=dedicated:NoSchedule` (cleanup MUST untaint `node02`!); "
@@ -881,6 +993,7 @@ CAUSAL_INCIDENTS: tuple[CausalIncidentBlueprint, ...] = (
         subtopics=("etcd", "RBAC", "ConfigMap", "troubleshooting"),
         requires_addons=("etcdctl",),
         example_seed="ca-etcd-snapshot-save.json",
+        primary_archetype_id="ca-etcd-snapshot-save",
         guidance=(
             "COHESIVE MULTI-LAYER INCIDENT in ONE business namespace `<ns>` + node `controlplane`: "
             "(1) Setup writes a service configuration file `/opt/cka/<ns>/config.env` on `controlplane` via setup.node_commands (using `mkdir -p` and cleanup `rm -rf /opt/cka/<ns>`) OR stops kubelet on `node01`; "
@@ -896,6 +1009,7 @@ CAUSAL_INCIDENTS: tuple[CausalIncidentBlueprint, ...] = (
         subtopics=("HPA", "ResourceQuota", "PodDisruptionBudget", "kubelet"),
         requires_addons=("metrics-server",),
         example_seed="wl-resources-too-high.json",
+        primary_archetype_id="wl-resources-cpu",
         guidance=(
             "COHESIVE MULTI-LAYER INCIDENT in ONE business namespace `<ns>` + node `node01`: "
             "(1) `kubelet` on `node01` is stopped via setup.node_commands (`systemctl stop kubelet`); "
@@ -911,6 +1025,7 @@ CAUSAL_INCIDENTS: tuple[CausalIncidentBlueprint, ...] = (
         subtopics=("StatefulSet", "PersistentVolume", "Secret", "kubelet"),
         requires_addons=(),
         example_seed="st-pod-wrong-claim.json",
+        primary_archetype_id="st-pod-wrong-claim",
         guidance=(
             "COHESIVE MULTI-LAYER INCIDENT in ONE business namespace `<ns>` + node `node02`: "
             "(1) `kubelet` on `node02` is stopped via setup.node_commands; "
@@ -925,6 +1040,7 @@ CAUSAL_INCIDENTS: tuple[CausalIncidentBlueprint, ...] = (
         subtopics=("Gateway API", "HTTPRoute", "Service", "kubelet"),
         requires_addons=("gateway",),
         example_seed="sn-gateway-httproute.json",
+        primary_archetype_id="sn-gateway-httproute",
         guidance=(
             "COHESIVE MULTI-LAYER INCIDENT in ONE business namespace `<ns>` + node `node01`: "
             "(1) `kubelet` on `node01` is stopped via setup.node_commands while `v1` and `v2` Deployments are pinned/scheduled across workers; "
@@ -940,6 +1056,7 @@ CAUSAL_INCIDENTS: tuple[CausalIncidentBlueprint, ...] = (
         subtopics=("Kustomize", "RBAC", "ServiceAccount", "kubelet"),
         requires_addons=(),
         example_seed="ca-rbac-pod-reader.json",
+        primary_archetype_id="ca-rbac-least-priv",
         guidance=(
             "COHESIVE MULTI-LAYER INCIDENT in ONE business namespace `<ns>` + node `node02`: "
             "(1) `kubelet` on `node02` is stopped via setup.node_commands; "
@@ -1067,6 +1184,19 @@ SEED_ARCHETYPE_MAP: dict[str, str] = {
     "seed-ts-readiness-probe": "ts-readiness-probe",
     "seed-wl-resources-too-high": "wl-resources-cpu",
     "seed-wl-taint-toleration": "wl-taint-toleration",
+    "seed-ca-kustomize-overlay": "ca-kustomize-overlay",
+    "seed-ca-clusterrole-sa": "ca-clusterrole-sa",
+    "seed-ca-csr-user-auth": "ca-csr-user-auth",
+    "seed-wl-hpa-autoscale": "wl-hpa-autoscale",
+    "seed-wl-pdb-priorityclass": "wl-pdb-priorityclass",
+    "seed-wl-cronjob-policy": "wl-cronjob-policy",
+    "seed-wl-native-sidecar": "wl-native-sidecar",
+    "seed-sn-ingress-to-gateway-migration": "sn-ingress-to-gateway-migration",
+    "seed-sn-gateway-canary-weights": "sn-gateway-canary-weights",
+    "seed-st-pvc-local-path": "st-pvc-local-path",
+    "seed-ca-etcd-restore": "ca-etcd-restore",
+    "seed-ca-apiserver-static-pod-fix": "ca-controlplane-static-pod-fix",
+    "seed-ca-kubeadm-node-drain": "ca-kubeadm-node-drain",
 }
 
 _ARCHETYPE_HINTS: tuple[tuple[tuple[str, ...], str, int], ...] = (

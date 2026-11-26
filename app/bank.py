@@ -58,10 +58,13 @@ def publish_question(
     state: str = "published",
     probe_result: dict | None = None,
     generator_meta: dict | None = None,
+    quality_score: int | None = None,
+    quality_report: dict | None = None,
 ) -> dict:
     digest = envelope_hash(env)
     fp = structural_fingerprint(env)
     now = time.time()
+    q_report_str = json.dumps(quality_report) if quality_report is not None else None
     with db.connect() as conn:
         existing = conn.execute(
             "SELECT id, state, archetype_id, envelope_json FROM bank_questions WHERE envelope_hash = ?",
@@ -72,7 +75,9 @@ def publish_question(
             if existing["state"] == "draft" and state == "published":
                 conn.execute(
                     "UPDATE bank_questions SET envelope_json = ?, title = ?, state = 'published',"
-                    " probe_result_json = ?, generator_meta_json = ?, archetype_id = ?, fingerprint = ?"
+                    " probe_result_json = ?, generator_meta_json = ?, archetype_id = ?, fingerprint = ?,"
+                    " quality_score = COALESCE(?, quality_score),"
+                    " quality_report_json = COALESCE(?, quality_report_json)"
                     " WHERE id = ?",
                     (
                         env.model_dump_json(),
@@ -81,6 +86,8 @@ def publish_question(
                         json.dumps(generator_meta) if generator_meta else None,
                         env.archetype_id,
                         fp,
+                        quality_score,
+                        q_report_str,
                         existing["id"],
                     ),
                 )
@@ -94,13 +101,53 @@ def publish_question(
                     (env.archetype_id and existing["archetype_id"] != env.archetype_id)
                     or (env.hints and not prev_env.get("hints"))
                     or (env.fast_solution_commands and not prev_env.get("fast_solution_commands"))
+                    or (env.schema_version != prev_env.get("schema_version"))
+                    or (env.model_dump() != prev_env)
                 )
                 if needs_refresh:
                     conn.execute(
-                        "UPDATE bank_questions SET envelope_json = ?, archetype_id = ?, fingerprint = ? WHERE id = ?",
-                        (env.model_dump_json(), env.archetype_id, fp, existing["id"]),
+                        "UPDATE bank_questions SET envelope_json = ?, archetype_id = ?, fingerprint = ?,"
+                        " title = ?, difficulty = ?, weight_pct = ?, estimated_minutes = ? WHERE id = ?",
+                        (
+                            env.model_dump_json(),
+                            env.archetype_id,
+                            fp,
+                            env.title,
+                            env.difficulty,
+                            env.weight,
+                            env.estimated_minutes,
+                            existing["id"],
+                        ),
                     )
             return {"id": existing["id"], "created": False}
+
+        if source == "seed" and state == "published":
+            seed_row = conn.execute(
+                "SELECT id, envelope_hash, envelope_json FROM bank_questions"
+                " WHERE source = 'seed' AND json_extract(envelope_json, '$.id') = ?",
+                (env.id,),
+            ).fetchone()
+            if seed_row:
+                if seed_row["envelope_hash"] != digest or seed_row["envelope_json"] != env.model_dump_json():
+                    conn.execute(
+                        "UPDATE bank_questions SET envelope_json = ?, envelope_hash = ?, fingerprint = ?,"
+                        " title = ?, domain = ?, subtopics_json = ?, difficulty = ?, weight_pct = ?,"
+                        " estimated_minutes = ?, archetype_id = ? WHERE id = ?",
+                        (
+                            env.model_dump_json(),
+                            digest,
+                            fp,
+                            env.title,
+                            env.domain,
+                            json.dumps(env.subtopics),
+                            env.difficulty,
+                            env.weight,
+                            env.estimated_minutes,
+                            env.archetype_id,
+                            seed_row["id"],
+                        ),
+                    )
+                return {"id": seed_row["id"], "created": False}
 
         if state == "published":
             dup = conn.execute(
@@ -114,8 +161,9 @@ def publish_question(
         conn.execute(
             "INSERT INTO bank_questions (id, envelope_json, envelope_hash, title, domain,"
             " subtopics_json, difficulty, weight_pct, estimated_minutes, source, state, created_at,"
-            " probe_result_json, generator_meta_json, archetype_id, fingerprint)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " probe_result_json, generator_meta_json, archetype_id, fingerprint,"
+            " quality_score, quality_report_json)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 question_id,
                 env.model_dump_json(),
@@ -133,6 +181,8 @@ def publish_question(
                 json.dumps(generator_meta) if generator_meta else None,
                 env.archetype_id,
                 fp,
+                quality_score,
+                q_report_str,
             ),
         )
     return {"id": question_id, "created": True}
@@ -214,7 +264,8 @@ def list_questions(
         rows = conn.execute(
             f"SELECT id, title, domain, difficulty, weight_pct, estimated_minutes,"
             f" source, state, times_used, last_used_at, first_try_pass_count,"
-            f" avg_solve_seconds, archetype_id, retired_reason, created_at, probe_result_json"
+            f" avg_solve_seconds, archetype_id, retired_reason, created_at, probe_result_json,"
+            f" quality_score"
             f" FROM bank_questions WHERE {where}"
             f" ORDER BY created_at DESC LIMIT ? OFFSET ?",
             (*params, max(1, min(500, limit)), max(0, offset)),
@@ -243,7 +294,13 @@ def get_question(question_id: str) -> dict | None:
     if not row:
         return None
     data = dict(row)
-    for field in ("envelope_json", "probe_result_json", "generator_meta_json", "subtopics_json"):
+    for field in (
+        "envelope_json",
+        "probe_result_json",
+        "generator_meta_json",
+        "subtopics_json",
+        "quality_report_json",
+    ):
         raw = data.get(field)
         if raw:
             try:
@@ -284,13 +341,18 @@ def update_after_probe(
     *,
     state: str,
     probe_result: dict | None = None,
+    quality_score: int | None = None,
+    quality_report: dict | None = None,
 ) -> bool:
     digest = envelope_hash(env)
     fp = structural_fingerprint(env)
+    q_report_str = json.dumps(quality_report) if quality_report is not None else None
     with db.connect() as conn:
         cur = conn.execute(
             "UPDATE bank_questions SET envelope_json = ?, envelope_hash = ?, title = ?,"
-            " state = ?, probe_result_json = ?, retired_reason = NULL, archetype_id = ?, fingerprint = ?"
+            " state = ?, probe_result_json = ?, retired_reason = NULL, archetype_id = ?, fingerprint = ?,"
+            " quality_score = COALESCE(?, quality_score),"
+            " quality_report_json = COALESCE(?, quality_report_json)"
             " WHERE id = ?",
             (
                 env.model_dump_json(),
@@ -300,10 +362,56 @@ def update_after_probe(
                 json.dumps(probe_result) if probe_result else None,
                 env.archetype_id,
                 fp,
+                quality_score,
+                q_report_str,
                 question_id,
             ),
         )
     return cur.rowcount > 0
+
+
+def record_feedback(
+    question_id: str,
+    reason_code: str,
+    note: str = "",
+    *,
+    archetype_id: str | None = None,
+) -> dict:
+    """Persist structured question quality feedback for future Planner pitfall avoidance."""
+    clean_code = (reason_code or "other").strip().lower()[:40]
+    clean_note = (note or "").strip()[:400]
+    with db.connect() as conn:
+        if not archetype_id:
+            row = conn.execute(
+                "SELECT archetype_id FROM bank_questions WHERE id = ?", (question_id,)
+            ).fetchone()
+            archetype_id = row["archetype_id"] if row else None
+        fid = f"qf-{uuid.uuid4().hex[:10]}"
+        conn.execute(
+            "INSERT INTO question_feedback (id, bank_question_id, archetype_id, reason_code, note, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (fid, question_id, archetype_id, clean_code, clean_note or None, time.time()),
+        )
+    return {"id": fid, "bank_question_id": question_id, "archetype_id": archetype_id, "reason_code": clean_code}
+
+
+def recent_feedback_pitfalls(limit: int = 40) -> dict[str, list[str]]:
+    """Return recent user-reported pitfalls grouped by archetype_id for SlotPlanner."""
+    with db.connect() as conn:
+        rows = conn.execute(
+            "SELECT archetype_id, reason_code, note FROM question_feedback"
+            " WHERE archetype_id IS NOT NULL AND archetype_id != ''"
+            " ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    grouped: dict[str, list[str]] = {}
+    for row in rows:
+        aid = row["archetype_id"]
+        msg = row["reason_code"] + (f": {row['note']}" if row["note"] else "")
+        bucket = grouped.setdefault(aid, [])
+        if msg not in bucket and len(bucket) < 5:
+            bucket.append(msg)
+    return grouped
 
 
 def record_usage(question_id: str) -> None:
@@ -442,6 +550,23 @@ def draw_exam_sample(
     used_namespaces: set[str] = set()
     used_nodes: set[str] = set()
     used_archetypes: set[str] = set()
+    use_diff_curve = ensure_disjoint_namespaces and count >= 10 and not difficulty and strategy == "exam_balanced"
+    tier_targets: dict[str, int] = {}
+    tier_counts: dict[str, int] = {"exam_standard": 0, "killer_hardcore": 0, "boss_fight": 0}
+    if use_diff_curve:
+        std_n = round(count * 0.60)
+        hard_n = round(count * 0.30)
+        boss_n = max(1, count - std_n - hard_n)
+        tier_targets = {"exam_standard": std_n, "killer_hardcore": hard_n, "boss_fight": boss_n}
+
+    def sort_with_curve(cands: list[dict]) -> list[dict]:
+        if not use_diff_curve:
+            return cands
+        def _curve_key(r: dict) -> tuple:
+            d = r.get("difficulty") or "exam_standard"
+            deficit = tier_targets.get(d, 0) - tier_counts.get(d, 0)
+            return (0 if deficit > 0 else 1, -deficit)
+        return sorted(cands, key=_curve_key)
 
     def compatible(r: dict, *, strict_arch: bool = True) -> bool:
         if r["id"] in used_ids:
@@ -457,6 +582,7 @@ def draw_exam_sample(
 
     def accept(r: dict) -> dict:
         used_ids.add(r["id"])
+        tier_counts[r.get("difficulty") or "exam_standard"] = tier_counts.get(r.get("difficulty") or "exam_standard", 0) + 1
         if ensure_disjoint_namespaces:
             used_namespaces.update(r["_namespaces"])
             used_nodes.update(r["_nodes"])
@@ -490,10 +616,10 @@ def draw_exam_sample(
     picks: list[dict] = []
     fallbacks: list[dict] = []
     for domain, wanted in allocation.items():
-        cands = pool(domain)
+        cands = sort_with_curve(pool(domain))
         taken: list[dict] = []
         for strict in (True, False):
-            for r in cands:
+            for r in sort_with_curve(cands):
                 if len(taken) >= wanted:
                     break
                 if compatible(r, strict_arch=strict):
@@ -508,7 +634,7 @@ def draw_exam_sample(
             key=sort_key,
         )
         for strict in (True, False):
-            for row in rest:
+            for row in sort_with_curve(rest):
                 if len(picks) >= count:
                     break
                 if compatible(row, strict_arch=strict):
@@ -596,25 +722,46 @@ def prune_bank(*, apply: bool = False) -> dict:
 
 
 def audit_legacy_questions(*, apply: bool = False) -> dict:
-    """Identify and optionally retire flawed legacy LLM items (archetype_id IS NULL)."""
+    """Identify and optionally retire flawed LLM items across the published bank."""
     import re as _re
 
     spoiler_re = _re.compile(
-        r"\bbecause\s+(?:the\s+|its?\s+|a\s+|wrong\s+)?(?:selector|container\s+command|image\s+tag|targetport|readiness\s*probe|liveness\s*probe|rolebinding|networkpolicy)\b",
+        r"\bbecause\s+(?:of\s+)?(?:the\s+|its?\s+|a\s+|an\s+|wrong\s+|missing\s+|incorrect\s+)?(?:selector|container\s+command|image\s+tag|targetport|readiness\s*probe|liveness\s*probe|rolebinding|networkpolicy|port\s+mismatch|wrong\s+command|typo|missing\s+port)"
+        r"|\bhas\s+(?:a\s+|an\s+)?(?:wrong\s+(?:selector|targetport|image|command|tag|rolebinding|mountpath)|typo\s+in|missing\s+(?:selector|label|port|volumemount))\b",
         _re.I,
     )
+    cluster_check_types = {
+        "clusterrole",
+        "clusterrolebinding",
+        "pv",
+        "persistentvolume",
+        "sc",
+        "storageclass",
+        "crd",
+        "customresourcedefinition",
+        "priorityclass",
+        "csr",
+        "certificatesigningrequest",
+        "node_command_exit_zero",
+    }
     with db.connect() as conn:
         rows = conn.execute(
-            "SELECT id, title, domain, difficulty, created_at, envelope_json"
-            " FROM bank_questions WHERE source = 'llm' AND state = 'published' AND archetype_id IS NULL"
+            "SELECT id, title, domain, difficulty, archetype_id, created_at, envelope_json"
+            " FROM bank_questions WHERE source = 'llm' AND state = 'published'"
             " ORDER BY created_at DESC"
         ).fetchall()
 
         spoiler_ids: list[str] = []
         no_docs_ids: list[str] = []
         sn_excess_ids: list[str] = []
+        weak_boss_ids: list[str] = []
+        cluster_leak_ids: list[str] = []
+        v11_ids: list[str] = []
+        legacy_total = 0
         sn_seen = 0
         for r in rows:
+            if not r["archetype_id"]:
+                legacy_total += 1
             try:
                 env = json.loads(r["envelope_json"])
             except ValueError:
@@ -627,16 +774,57 @@ def audit_legacy_questions(*, apply: bool = False) -> dict:
             if not env.get("docs_links"):
                 no_docs_ids.append(r["id"])
                 continue
-            if r["domain"] == "Services & Networking" and r["difficulty"] == "exam_standard":
+            if (
+                not r["archetype_id"]
+                and r["domain"] == "Services & Networking"
+                and r["difficulty"] == "exam_standard"
+            ):
                 sn_seen += 1
                 if sn_seen > 4:
                     sn_excess_ids.append(r["id"])
+                    continue
+            if r["difficulty"] == "boss_fight":
+                sol = env.get("solution") or {}
+                nc = sol.get("node_commands") or []
+                valid_nc = [
+                    c for c in nc if isinstance(c, dict) and str(c.get("command") or "").strip() not in ("", "true", ":")
+                ]
+                has_setup_nc = bool((env.get("setup") or {}).get("node_commands"))
+                if not valid_nc and not has_setup_nc and len(sol.get("commands") or []) < 2 and not sol.get("manifests"):
+                    weak_boss_ids.append(r["id"])
+                    continue
+            # Check cluster-scoped cleanup completeness
+            setup_ns = set((env.get("setup") or {}).get("namespaces") or [])
+            cleanup_obj = env.get("cleanup") or {}
+            cleanup_ns = set(cleanup_obj.get("namespaces") or [])
+            has_cleanup_cmds = bool(cleanup_obj.get("commands") or cleanup_obj.get("node_commands"))
+            for chk in env.get("checks") or []:
+                params = chk.get("params") or {}
+                kind = str(params.get("kind") or "").lower()
+                if (
+                    kind in cluster_check_types
+                    and not has_cleanup_cmds
+                    and not (cleanup_ns >= setup_ns and bool(setup_ns) and kind in ("clusterrole", "clusterrolebinding"))
+                ):
+                    if not (setup_ns and cleanup_obj.get("commands") is not None and has_cleanup_cmds):
+                        # Only flag if cluster-scoped setup lacks any cleanup commands or teardown labels
+                        setup_manifests = "\n".join(str(m) for m in ((env.get("setup") or {}).get("manifests") or []))
+                        if not cleanup_obj.get("commands") and not ("labels:" in setup_manifests and "cka-arena/scenario" in setup_manifests):
+                            if not setup_ns:
+                                cluster_leak_ids.append(r["id"])
+                                break
+            if str(env.get("schema_version") or "") != "1.2" or len(env.get("hints") or []) < 2 or not env.get("fast_solution_commands"):
+                v11_ids.append(r["id"])
 
         retire_map: dict[str, str] = {}
         for qid in sn_excess_ids:
             retire_map[qid] = "legacy audit: excess Services & Networking exam_standard clone/bloat"
         for qid in no_docs_ids:
             retire_map[qid] = "legacy audit: missing docs_links"
+        for qid in weak_boss_ids:
+            retire_map[qid] = "legacy audit: boss_fight lacks substantive fault/solution"
+        for qid in cluster_leak_ids:
+            retire_map[qid] = "legacy audit: cluster-scoped resource missing cleanup"
         for qid in spoiler_ids:
             retire_map[qid] = "legacy audit: symptom spoiler leak"
 
@@ -649,10 +837,14 @@ def audit_legacy_questions(*, apply: bool = False) -> dict:
 
     return {
         "applied": apply,
-        "legacy_total": len(rows),
+        "scanned_total": len(rows),
+        "legacy_total": legacy_total,
         "spoilers_flagged": len(spoiler_ids),
         "no_docs_flagged": len(no_docs_ids),
         "sn_excess_flagged": len(sn_excess_ids),
+        "weak_boss_flagged": len(weak_boss_ids),
+        "cluster_leak_flagged": len(cluster_leak_ids),
+        "v11_flagged": len(v11_ids),
         "retired_count": len(retire_map),
     }
 

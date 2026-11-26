@@ -1,0 +1,74 @@
+{
+  "schema_version": "1.2",
+  "id": "seed-sn-ingress-to-gateway-migration",
+  "title": "Migrate Ingress Traffic to Gateway HTTPRoute",
+  "domain": "Services & Networking",
+  "subtopics": ["Gateway API", "HTTPRoute", "Ingress", "Migration"],
+  "difficulty": "killer_hardcore",
+  "weight": 8,
+  "estimated_minutes": 6,
+  "prompt": "Namespace `cka-migrate` runs workload `store` exposed by Service `store-svc` on port `80`, along with an existing `Gateway` named `store-gw` (`gatewayClassName: eg`). Legacy Ingress routing must be replaced with Gateway API.\n\nPerform the following tasks:\n1. Create an `HTTPRoute` named `store-route` in namespace `cka-migrate` attached to `parentRefs` `store-gw` matching hostname `store.cka.local`.\n2. Route requests to Service `store-svc` on port `80` with prefix match `/`.\n3. Delete the legacy Ingress `store-legacy` in namespace `cka-migrate`.",
+  "copy_tokens": ["cka-migrate", "store-svc", "store-gw", "store-route", "store.cka.local", "store-legacy"],
+  "docs_links": [
+    {"label": "Migrating from Ingress", "url": "https://gateway.networking.k8s.io/guides/getting-started/migrating-from-ingress/"}
+  ],
+  "hints": [
+    "HTTPRoute specifies `parentRefs: [{name: store-gw}]`, `hostnames: [store.cka.local]`, and `backendRefs: [{name: store-svc, port: 80}]`.",
+    "Remember to run `k -n cka-migrate delete ingress store-legacy` after applying `store-route`."
+  ],
+  "fast_solution_commands": [
+    "k -n cka-migrate delete ingress store-legacy",
+    "k -n cka-migrate get gateway store-gw -o yaml"
+  ],
+  "setup": {
+    "namespaces": ["cka-migrate"],
+    "manifests": [
+      "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: store\n  namespace: cka-migrate\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: store\n  template:\n    metadata:\n      labels:\n        app: store\n    spec:\n      containers:\n      - name: web\n        image: nginx:1.27-alpine\n        ports:\n        - containerPort: 80\n---\napiVersion: v1\nkind: Service\nmetadata:\n  name: store-svc\n  namespace: cka-migrate\nspec:\n  selector:\n    app: store\n  ports:\n  - port: 80\n    targetPort: 80\n---\napiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n  name: store-legacy\n  namespace: cka-migrate\n  labels:\n    legacy: \"true\"\nspec:\n  rules:\n  - host: store.cka.local\n    http:\n      paths:\n      - path: /\n        pathType: Prefix\n        backend:\n          service:\n            name: store-svc\n            port:\n              number: 80\n---\napiVersion: gateway.networking.k8s.io/v1\nkind: Gateway\nmetadata:\n  name: store-gw\n  namespace: cka-migrate\nspec:\n  gatewayClassName: eg\n  listeners:\n  - name: http\n    protocol: HTTP\n    port: 80\n    hostname: store.cka.local\n    allowedRoutes:\n      namespaces:\n        from: Same\n"
+    ]
+  },
+  "checks": [
+    {
+      "id": "chk-route-accepted",
+      "description": "HTTPRoute `store-route` is Accepted",
+      "type": "kubectl_jsonpath",
+      "params": {"kind": "httproute", "name": "store-route", "namespace": "cka-migrate", "jsonpath": "{.status.parents[0].conditions[?(@.type=='Accepted')].status}", "operator": "equals", "expected": "True"},
+      "weight_ratio": 1.0
+    },
+    {
+      "id": "chk-route-backend",
+      "description": "HTTPRoute `store-route` points to `store-svc`",
+      "type": "kubectl_jsonpath",
+      "params": {"kind": "httproute", "name": "store-route", "namespace": "cka-migrate", "jsonpath": "{.spec.rules[0].backendRefs[0].name}", "operator": "equals", "expected": "store-svc"},
+      "weight_ratio": 1.0
+    },
+    {
+      "id": "chk-legacy-deleted",
+      "description": "Legacy Ingress `store-legacy` has been removed",
+      "type": "kubectl_jsonpath",
+      "params": {"kind": "ingress", "namespace": "cka-migrate", "label_selector": "legacy=true", "jsonpath": "{.items[*].metadata.name}", "operator": "not_contains", "expected": "store-legacy"},
+      "weight_ratio": 1.0
+    },
+    {
+      "id": "chk-store-ep",
+      "description": "Service `store-svc` exposes ready endpoints",
+      "type": "service_endpoints_ready",
+      "params": {"namespace": "cka-migrate", "service_name": "store-svc", "min_ready_addresses": 1},
+      "weight_ratio": 0.5
+    }
+  ],
+  "solution": {
+    "manifests": [
+      "apiVersion: gateway.networking.k8s.io/v1\nkind: HTTPRoute\nmetadata:\n  name: store-route\n  namespace: cka-migrate\nspec:\n  parentRefs:\n  - name: store-gw\n  hostnames:\n  - store.cka.local\n  rules:\n  - matches:\n    - path:\n        type: PathPrefix\n        value: /\n    backendRefs:\n    - name: store-svc\n      port: 80\n"
+    ],
+    "commands": [
+      "kubectl -n cka-migrate delete ingress store-legacy --ignore-not-found"
+    ]
+  },
+  "cleanup": {
+    "namespaces": ["cka-migrate"]
+  },
+  "reference_solution": "Apply `HTTPRoute` `store-route` referencing `store-gw` and `store-svc`, then delete `ingress/store-legacy`.",
+  "destructive": false,
+  "archetype_id": "sn-ingress-to-gateway-migration",
+  "context_command": "kubectl config use-context cka"
+}

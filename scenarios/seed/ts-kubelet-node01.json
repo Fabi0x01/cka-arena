@@ -11,7 +11,7 @@
   "difficulty": "exam_standard",
   "weight": 5,
   "estimated_minutes": 4,
-  "prompt": "The node `node01` is in the `NotReady` state because its `kubelet` service is not running.\n\nPerform the following tasks:\n1. Restore the `kubelet` service on `node01` until the node reports `Ready`.\n2. Do not restart or reboot any other node.",
+  "prompt": "Node `node01` is reporting `NotReady` and scheduled Pods on it cannot become Ready.\n\nPerform the following tasks:\n1. Diagnose `node01` and restore it to `Ready`.\n2. Do not restart or reboot any other node.",
   "copy_tokens": [
     "node01",
     "NotReady",
@@ -44,7 +44,8 @@
       "params": {
         "node_name": "node01"
       },
-      "failure_hint": "Check `systemctl status kubelet` on node01 and start the service."
+      "failure_hint": "Check `systemctl status kubelet` on node01 and start the service.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-kubelet-active",
@@ -55,7 +56,8 @@
         "command": "systemctl is-active kubelet",
         "stdout_contains": "active"
       },
-      "failure_hint": "The kubelet unit is inactive \u2014 start it with systemctl."
+      "failure_hint": "The kubelet unit is inactive \u2014 start it with systemctl.",
+      "weight_ratio": 1.0
     }
   ],
   "solution": {

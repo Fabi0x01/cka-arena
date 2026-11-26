@@ -62,7 +62,8 @@
         ],
         "stdout_contains": "200"
       },
-      "failure_hint": "Allow ingress to app=api from app=client on port 80 and egress from client to the API."
+      "failure_hint": "Allow ingress to app=api from app=client on port 80 and egress from client to the API.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-client-dns",
@@ -77,7 +78,8 @@
           "nslookup api-svc.cka-netpol.svc.cluster.local | grep -q Address"
         ]
       },
-      "failure_hint": "Allow egress from client to kube-system on UDP/TCP 53."
+      "failure_hint": "Allow egress from client to kube-system on UDP/TCP 53.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-policy-exists",
@@ -88,7 +90,8 @@
         "name": "allow-client-api",
         "namespace": "cka-netpol"
       },
-      "failure_hint": "Create the policy with exactly that name."
+      "failure_hint": "Create the policy with exactly that name.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-intruder-denied",
@@ -105,7 +108,8 @@
           "http://api-svc.cka-netpol.svc.cluster.local"
         ]
       },
-      "failure_hint": "Do not allow app=intruder \u2014 the default deny must keep it blocked."
+      "failure_hint": "Do not allow app=intruder \u2014 the default deny must keep it blocked.",
+      "weight_ratio": 1.0
     }
   ],
   "solution": {

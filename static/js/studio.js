@@ -14,8 +14,8 @@ const DIFFS = ["exam_standard", "killer_hardcore", "boss_fight"];
 const STAGES = [
   { id: "A", label: "Plan" },
   { id: "B", label: "Build" },
-  { id: "C", label: "Gates" },
-  { id: "D", label: "Review" },
+  { id: "D", label: "Gates" },
+  { id: "C", label: "Review" },
   { id: "E", label: "Probe" },
 ];
 
@@ -501,8 +501,9 @@ export function initStudio({ bus, onSessionStarted, onBankChanged, openWorkspace
       }
       if (data.pipeline) {
         const p = data.pipeline;
-        el("perf-note").textContent = p.attempts
-          ? `Pipeline telemetry: ${p.published}/${p.attempts} published (${p.publish_rate_pct}%) · median ${p.median_latency_s}s.`
+        const avgS = p.avg_llm_ms != null ? `${(p.avg_llm_ms / 1000).toFixed(1)}s` : "—";
+        el("perf-note").textContent = p.attempted
+          ? `Pipeline telemetry: ${p.published}/${p.attempted} published (${p.publish_rate_pct ?? 0}%) · avg LLM ${avgS}.`
           : "No AI generations recorded yet.";
       }
     } catch {
@@ -548,7 +549,8 @@ export function initStudio({ bus, onSessionStarted, onBankChanged, openWorkspace
         const meta = document.createElement("span");
         meta.className = "bank-item-meta";
         const dom = item.domain.replace("Cluster Architecture, Installation & Configuration", "Cluster Arch");
-        meta.textContent = `${dom} · ${item.difficulty} · ${item.source} · used ${item.times_used}x`;
+        const qBadge = item.quality_score != null ? ` · Q:${item.quality_score}` : "";
+        meta.textContent = `${dom} · ${item.difficulty} · ${item.source}${qBadge} · used ${item.times_used}x`;
         head.append(title, meta);
         card.appendChild(head);
 
@@ -586,6 +588,15 @@ export function initStudio({ bus, onSessionStarted, onBankChanged, openWorkspace
           addBtn("AI Repair", "primary", async () => {
             const res = await api(`/api/bank/questions/${item.id}/repair`, { method: "POST" });
             toast(res.ok ? "Repaired & published!" : `Repair failed: ${res.error?.slice(0, 80)}`, res.ok ? "success" : "error");
+            await refreshCoverage();
+          });
+        } else if (state === "published" && item.source === "llm") {
+          addBtn("AI Polish", "", async () => {
+            const res = await api(`/api/bank/questions/${item.id}/polish`, { method: "POST" });
+            toast(
+              res.ok ? `Polished to v1.2 (Q:${res.quality_score ?? "?"})` : `Polish skipped: ${res.error?.slice(0, 80)}`,
+              res.ok ? "success" : "error",
+            );
             await refreshCoverage();
           });
         }
@@ -639,8 +650,15 @@ export function initStudio({ bus, onSessionStarted, onBankChanged, openWorkspace
     previewDebounce = setTimeout(runPracticePreview, 120);
   }
 
-  practiceDialog?.querySelectorAll('input[name="practice-mode"], #practice-difficulty')
-    .forEach((ctrl) => ctrl.addEventListener("change", schedulePracticePreview));
+  practiceDialog?.querySelectorAll('input[name="practice-mode"], #practice-difficulty, #practice-allow-destructive')
+    .forEach((ctrl) => ctrl.addEventListener("change", () => {
+      const modeVal = document.querySelector('input[name="practice-mode"]:checked')?.value;
+      const psiBox = el("practice-strict-psi");
+      if (psiBox && ctrl.name === "practice-mode") {
+        psiBox.checked = modeVal === "blind_exam";
+      }
+      schedulePracticePreview();
+    }));
   el("practice-count")?.addEventListener("change", schedulePracticePreview);
   el("practice-domains")?.addEventListener("change", schedulePracticePreview);
 
@@ -694,18 +712,52 @@ export function initStudio({ bus, onSessionStarted, onBankChanged, openWorkspace
     }
   });
 
+  el("btn-fill-archetypes")?.addEventListener("click", async () => {
+    if (job && job.status === "running") {
+      toast("A generation job is already running", "error");
+      return;
+    }
+    const llm = await api("/api/llm/config").catch(() => null);
+    if (llm && !llm.has_key) {
+      toast("No AI provider configured — add a key in Settings", "error", 5000);
+      document.dispatchEvent(new CustomEvent("open-settings"));
+      return;
+    }
+    const btn = el("btn-fill-archetypes");
+    btn.disabled = true;
+    btn.classList.add("loading");
+    try {
+      const res = await api("/api/generate/fill-archetypes?max_count=8", { method: "POST" });
+      if (!res.job_id) {
+        toast("All eligible archetypes already have published questions!", "success");
+        return;
+      }
+      job = blankJob(res.job_id, res.count || 5);
+      logEntries = [];
+      appendLog({ stage: "A", detail: `fill-archetypes started · ${res.count} archetype(s)` });
+      renderJob();
+      setStudioTab("pipeline");
+      toast(`Generating scenarios for ${res.count} uncovered archetype(s)…`, "success");
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove("loading");
+    }
+  });
+
   el("btn-audit-bank")?.addEventListener("click", async () => {
     const btn = el("btn-audit-bank");
     btn.disabled = true;
     try {
       const preview = await api("/api/bank/audit", { method: "POST", body: { apply: false } });
       if (!preview.retired_count) {
-        toast(`Bank audit clean — 0 flagged across ${preview.legacy_total} legacy LLM question(s)`, "success");
+        toast(`Bank audit clean — 0 retired across ${preview.scanned_total ?? preview.legacy_total} LLM question(s) (${preview.v11_flagged ?? 0} eligible for AI Polish)`, "success");
         return;
       }
       const ok = await confirmDialog(
-        `Retire ${preview.retired_count} flawed legacy question(s)?`,
-        `Scanned ${preview.legacy_total} legacy LLM scenarios: ${preview.spoilers_flagged} spoilers, ${preview.no_docs_flagged} missing docs, ${preview.sn_excess_flagged} S&N clone bloat.`,
+        `Retire ${preview.retired_count} flawed LLM question(s)?`,
+        `Scanned ${preview.scanned_total ?? preview.legacy_total} LLM scenarios: ${preview.spoilers_flagged} spoilers, ${preview.weak_boss_flagged ?? 0} weak boss fights, ${preview.cluster_leak_flagged ?? 0} cluster leaks, ${preview.no_docs_flagged} missing docs.`,
       );
       if (!ok) return;
       const applied = await api("/api/bank/audit", { method: "POST", body: { apply: true } });
@@ -726,7 +778,13 @@ export function initStudio({ bus, onSessionStarted, onBankChanged, openWorkspace
     const variant = document.querySelector('input[name="practice-mode"]:checked')?.value || "study";
     const mode = variant === "blind_exam" || variant === "guided_mock" ? "mock_exam" : "study";
     try {
-      const query = new URLSearchParams({ count: String(count), mode, variant });
+      const allowDestr = Boolean(el("practice-allow-destructive")?.checked);
+      const query = new URLSearchParams({
+        count: String(count),
+        mode,
+        variant,
+        allow_destructive: String(allowDestr),
+      });
       if (domains.length && domains.length < DOMAINS.length) query.set("domains", domains.join(","));
       if (difficulty) query.set("difficulty", difficulty);
       const data = await api(`/api/bank/preview?${query}`);
@@ -803,6 +861,8 @@ export function initStudio({ bus, onSessionStarted, onBankChanged, openWorkspace
           difficulty: previewed.difficulty,
           mode: previewed.mode,
           variant: previewed.variant,
+          allow_destructive: Boolean(el("practice-allow-destructive")?.checked),
+          strict_psi: Boolean(el("practice-strict-psi")?.checked),
         },
       });
       closePractice();

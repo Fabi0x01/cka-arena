@@ -1,0 +1,79 @@
+{
+  "schema_version": "1.2",
+  "id": "seed-ca-csr-user-auth",
+  "title": "Approve CSR & Grant Namespaced Access",
+  "domain": "Cluster Architecture, Installation & Configuration",
+  "subtopics": ["CSR", "TLS", "RBAC", "RoleBinding"],
+  "difficulty": "killer_hardcore",
+  "weight": 8,
+  "estimated_minutes": 6,
+  "prompt": "A pending Kubernetes `CertificateSigningRequest` named `dev-cka-csr` has been submitted for user `jane-cka` to authenticate via `kubernetes.io/kube-apiserver-client`.\n\nPerform the following tasks:\n1. Approve CertificateSigningRequest `dev-cka-csr`.\n2. In namespace `cka-csr`, create Role `dev-pod-ops` permitting `get`, `list`, and `create` on `pods`.\n3. In namespace `cka-csr`, create RoleBinding `jane-pod-ops` binding Role `dev-pod-ops` to User `jane-cka`.",
+  "copy_tokens": ["dev-cka-csr", "jane-cka", "cka-csr", "dev-pod-ops", "jane-pod-ops"],
+  "docs_links": [
+    {"label": "Manage TLS Certificates in a Cluster", "url": "https://kubernetes.io/docs/tasks/tls/managing-tls-in-a-cluster/"}
+  ],
+  "hints": [
+    "Inspect CSR status with `k get csr` and approve it using `k certificate approve dev-cka-csr`.",
+    "Remember to bind a User subject (`--user=jane-cka`) rather than a ServiceAccount."
+  ],
+  "fast_solution_commands": [
+    "k certificate approve dev-cka-csr",
+    "k -n cka-csr create role dev-pod-ops --verb=get,list,create --resource=pods",
+    "k -n cka-csr create rolebinding jane-pod-ops --role=dev-pod-ops --user=jane-cka"
+  ],
+  "setup": {
+    "namespaces": ["cka-csr"],
+    "manifests": [
+      "apiVersion: certificates.k8s.io/v1\nkind: CertificateSigningRequest\nmetadata:\n  name: dev-cka-csr\nspec:\n  request: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURSBSRVFVRVNULS0tLS0KTUlJQ2FqQ0NBVklDQVFBd0pURVJNQThHQTFVRUF3d0lhbUZ1WlMxamEyRXhFREFPQmdOVkJBb01CMk5yWVMxawpaWFl3Z2dFaU1BMEdDU3FHU0liM0RRRUJBUVVBQTRJQkR3QXdnZ0VLQW9JQkFRQ3ZsRzlHN0NuWGJvaFREeW8rCjZiZnFKcEVNaWtRTmZWMDBUWGR2MnRkWGdjSnlNY1ZzeGQ4M0hybmtzZlA4cUltS3owMVRpeEkyY1hNOEkwTVcKWWI0cWJ3eUlwMnMxdmpBR2E1SkFQR2w0WTF1aFlUYjJ3ZitJeFRQL1AwbnEycXB1RVppZk1VN2F4dEJJK0h1ZgpZK3NlcDhFL2pRS2c4RlZiRDNYajB6WjhReHl4WkxjSkp0T0VNM1pLNXpCbFVyZ1U2SXhTcjBRV0NtdzQvMk5LCldHTk9TdGlRMExWTFJPand4K3dNcU5yR29laVkxNmhuNWdmUUNBdVc2T2hXTkNMZVNhNFk2WE8zaFNrNG1tWTUKc2wwWjRKUlJnVUsvYWRtVVZRS253cEJNSEpldzBKTTcvdnJjMXZrNURSd0tWOUtUQW9XLzN0TnFNWTliRnhUSQoyVWhCQWdNQkFBR2dBREFOQmdrcWhraUc5dzBCQVFzRkFBT0NBUUVBckQySStrWG5WYXRkZDh0WDA2bnk2VGpJCkJ4Q2Y5RlpuK00zNjMxbUlTOHdpcENiTnZGeFlwU29kWnNmZlRLWFJpT3RGM3VQWmtsaXJoU3ZqMng5TmVnRksKVkVyRGpuVzdIMFN6b016S2hRYktNQTV3UDRhS1VDS3RkTmR2a2x6aWtwb0U2cUdkRkhXUSsxRUs2Zk5ma2RFRwpsMERqTWE0Z29qeGZNK0kzVVlTTmZOSEwvR1dLMHlQUXNNTFQwV3JFMVdnSFVVL0ExR3ZRV3Z3a0k5WHVEa25HClNtZzJ3Q3F3RGd0VFNIaG5XUFhRY2hpelB5OHl1TVJCMGlpcnNlYS91S1NBaHZTWVFnM1JFRFdEd2RyWnhGN2EKbGhmOWs4c3RWQWFHUURYQ2p3WkZFUis3S2dyUloxb1RaRi80VGRjSFFTMHFOVDNpeDk1VnF0ckxMR0p6RlE9PQotLS0tLUVORCBDRVJUSUZJQ0FURSBSRVFVRVNULS0tLS0K\n  signerName: kubernetes.io/kube-apiserver-client\n  expirationSeconds: 86400\n  usages:\n  - client auth\n"
+    ]
+  },
+  "checks": [
+    {
+      "id": "chk-csr-approved",
+      "description": "CertificateSigningRequest `dev-cka-csr` is Approved and Issued",
+      "type": "kubectl_jsonpath",
+      "params": {"kind": "csr", "name": "dev-cka-csr", "jsonpath": "{.status.conditions[?(@.type=='Approved')].status}", "operator": "equals", "expected": "True"},
+      "weight_ratio": 1.0
+    },
+    {
+      "id": "chk-can-list-pods",
+      "description": "User `jane-cka` can list pods in `cka-csr`",
+      "type": "kubectl_auth_can_i",
+      "params": {"verb": "list", "resource": "pods", "user": "jane-cka", "namespace": "cka-csr", "target_namespace": "cka-csr", "expected_allowed": true},
+      "weight_ratio": 1.0
+    },
+    {
+      "id": "chk-cannot-delete-pods",
+      "description": "User `jane-cka` cannot delete pods in `cka-csr`",
+      "type": "kubectl_auth_can_i",
+      "params": {"verb": "delete", "resource": "pods", "user": "jane-cka", "namespace": "cka-csr", "target_namespace": "cka-csr", "expected_allowed": false},
+      "weight_ratio": 0.5
+    },
+    {
+      "id": "chk-rb-exists",
+      "description": "RoleBinding `jane-pod-ops` exists in `cka-csr`",
+      "type": "kubectl_resource_exists",
+      "params": {"kind": "rolebinding", "name": "jane-pod-ops", "namespace": "cka-csr"},
+      "weight_ratio": 0.5
+    }
+  ],
+  "solution": {
+    "manifests": [
+      "apiVersion: rbac.authorization.k8s.io/v1\nkind: Role\nmetadata:\n  name: dev-pod-ops\n  namespace: cka-csr\nrules:\n- apiGroups: [\"\"]\n  resources: [\"pods\"]\n  verbs: [\"get\", \"list\", \"create\"]\n"
+    ],
+    "commands": [
+      "kubectl certificate approve dev-cka-csr",
+      "kubectl -n cka-csr create rolebinding jane-pod-ops --role=dev-pod-ops --user=jane-cka"
+    ]
+  },
+  "cleanup": {
+    "namespaces": ["cka-csr"],
+    "commands": [
+      "kubectl delete csr dev-cka-csr --ignore-not-found"
+    ]
+  },
+  "reference_solution": "Approve `dev-cka-csr`, create Role `dev-pod-ops`, and bind it to User `jane-cka`.",
+  "destructive": false,
+  "archetype_id": "ca-csr-user-auth",
+  "context_command": "kubectl config use-context cka"
+}

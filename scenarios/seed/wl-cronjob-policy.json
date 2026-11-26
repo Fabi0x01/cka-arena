@@ -1,0 +1,58 @@
+{
+  "schema_version": "1.2",
+  "id": "seed-wl-cronjob-policy",
+  "title": "Configure CronJob & Manual Job Run",
+  "domain": "Workloads & Scheduling",
+  "subtopics": ["CronJob", "Job", "concurrencyPolicy"],
+  "difficulty": "exam_standard",
+  "weight": 4,
+  "estimated_minutes": 4,
+  "prompt": "A scheduled nightly cleanup task must run safely without overlapping executions in namespace `cka-cron`.\n\nPerform the following tasks:\n1. Create CronJob `log-rotate` in namespace `cka-cron` with schedule `\"*/15 * * * *\"`, `concurrencyPolicy: Forbid`, and `successfulJobsHistoryLimit: 2`, running container `busybox:1.36` with command `[\"sh\", \"-c\", \"echo rotated && date\"]` (`restartPolicy: OnFailure`).\n2. Trigger an immediate one-off Job named `log-rotate-now` from CronJob `log-rotate` and ensure it completes (`succeeded >= 1`).",
+  "copy_tokens": ["cka-cron", "log-rotate", "log-rotate-now", "Forbid", "busybox:1.36"],
+  "docs_links": [
+    {"label": "Automated Tasks with CronJobs", "url": "https://kubernetes.io/docs/tasks/job/automated-tasks-with-cron-jobs/"}
+  ],
+  "hints": [
+    "Scaffold with `k -n cka-cron create cronjob log-rotate --image=busybox:1.36 --schedule=\"*/15 * * * *\" $do -- sh -c 'echo rotated && date'`.",
+    "Trigger an immediate run with `k -n cka-cron create job --from=cronjob/log-rotate log-rotate-now`."
+  ],
+  "fast_solution_commands": [
+    "k -n cka-cron create cronjob log-rotate --image=busybox:1.36 --schedule='*/15 * * * *' -- sh -c 'echo rotated && date'",
+    "k -n cka-cron create job --from=cronjob/log-rotate log-rotate-now"
+  ],
+  "setup": {
+    "namespaces": ["cka-cron"],
+    "manifests": []
+  },
+  "checks": [
+    {
+      "id": "chk-cj-policy",
+      "description": "CronJob `log-rotate` sets concurrencyPolicy Forbid and historyLimit 2",
+      "type": "kubectl_jsonpath",
+      "params": {"kind": "cronjob", "name": "log-rotate", "namespace": "cka-cron", "jsonpath": "{.spec.concurrencyPolicy}", "operator": "equals", "expected": "Forbid"},
+      "weight_ratio": 1.0
+    },
+    {
+      "id": "chk-job-done",
+      "description": "Manual Job `log-rotate-now` succeeded",
+      "type": "kubectl_jsonpath",
+      "params": {"kind": "job", "name": "log-rotate-now", "namespace": "cka-cron", "jsonpath": "{.status.succeeded}", "operator": "gte", "expected": 1},
+      "weight_ratio": 1.0
+    }
+  ],
+  "solution": {
+    "manifests": [
+      "apiVersion: batch/v1\nkind: CronJob\nmetadata:\n  name: log-rotate\n  namespace: cka-cron\nspec:\n  schedule: \"*/15 * * * *\"\n  concurrencyPolicy: Forbid\n  successfulJobsHistoryLimit: 2\n  jobTemplate:\n    spec:\n      template:\n        spec:\n          restartPolicy: OnFailure\n          containers:\n          - name: rotate\n            image: busybox:1.36\n            command: [\"sh\", \"-c\", \"echo rotated && date\"]\n"
+    ],
+    "commands": [
+      "kubectl -n cka-cron create job --from=cronjob/log-rotate log-rotate-now"
+    ]
+  },
+  "cleanup": {
+    "namespaces": ["cka-cron"]
+  },
+  "reference_solution": "Apply the CronJob manifest with `concurrencyPolicy: Forbid`, then run `kubectl create job --from=cronjob/log-rotate log-rotate-now`.",
+  "destructive": false,
+  "archetype_id": "wl-cronjob-policy",
+  "context_command": "kubectl config use-context cka"
+}

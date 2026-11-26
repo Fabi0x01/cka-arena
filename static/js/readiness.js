@@ -1,6 +1,7 @@
 // readiness.js — Orbital Threshold Scale Bar, 4 Criteria Grid, Drills & Filterable 59-Archetype Skill Tree
 import { api } from "./api.js";
 import { el, toast, confirmDialog } from "./ui.js";
+import { openExamReview } from "./review.js";
 
 const DOMAIN_SHORT = {
   "Troubleshooting": "Troubleshooting",
@@ -10,7 +11,7 @@ const DOMAIN_SHORT = {
   "Storage": "Storage",
 };
 
-export function initReadiness({ onSessionStarted, openWorkspace, openStudio }) {
+export function initReadiness({ onSessionStarted, openWorkspace, openStudio, onOpenCodex }) {
   let cachedData = null;
   let activeDomain = "all";
 
@@ -207,6 +208,64 @@ export function initReadiness({ onSessionStarted, openWorkspace, openStudio }) {
     }
   }
 
+  function triggerMissionAction(item) {
+    if (!item) return;
+    if (item.action_type === "launch_variant") {
+      startPresetSession(item.variant || "weakness_drill", item.count || 5);
+    } else if (item.action_type === "codex_topic" && item.topic_id && onOpenCodex) {
+      onOpenCodex(item.topic_id);
+    } else if (item.archetype_id) {
+      launchArchetypePractice(item.archetype_id);
+    }
+  }
+
+  function renderDailyMission(plan) {
+    const card = el("daily-mission-card");
+    const dateInput = el("exam-target-date");
+    if (dateInput && document.activeElement !== dateInput) {
+      dateInput.value = plan?.exam_target_date || "";
+    }
+    if (!card || !plan) return;
+    card.innerHTML = "";
+    const top = document.createElement("div");
+    top.className = "row";
+    top.style.display = "flex";
+    top.style.justifyContent = "space-between";
+    top.style.alignItems = "center";
+    top.style.gap = "8px";
+    const info = document.createElement("span");
+    info.textContent = plan.headline || `${plan.reviews_due || 0} SRS review(s) due`;
+    const primaryItem = (plan.items || [])[0];
+    top.appendChild(info);
+    if (primaryItem) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn sm primary";
+      btn.textContent = primaryItem.label || "Launch Mission";
+      btn.onclick = () => triggerMissionAction(primaryItem);
+      top.appendChild(btn);
+    }
+    card.appendChild(top);
+
+    for (const item of (plan.items || []).slice(0, 4)) {
+      const row = document.createElement("div");
+      row.className = "row";
+      row.style.display = "flex";
+      row.style.justifyContent = "space-between";
+      row.style.alignItems = "center";
+      row.style.gap = "8px";
+      const text = document.createElement("span");
+      text.textContent = `${item.label} — ${item.detail}`;
+      const go = document.createElement("button");
+      go.type = "button";
+      go.className = "btn sm ghost";
+      go.textContent = item.action_type === "codex_topic" ? "Study Codex" : "Practice";
+      go.onclick = () => triggerMissionAction(item);
+      row.append(text, go);
+      card.appendChild(row);
+    }
+  }
+
   async function refresh() {
     const summaryEl = el("readiness-summary");
     const critEl = el("readiness-criteria");
@@ -214,7 +273,11 @@ export function initReadiness({ onSessionStarted, openWorkspace, openStudio }) {
     if (!summaryEl || !critEl) return;
 
     try {
-      const data = await api("/api/readiness");
+      const [data, mission] = await Promise.all([
+        api("/api/readiness"),
+        api("/api/study-plan/today").catch(() => null),
+      ]);
+      if (mission) renderDailyMission(mission);
       cachedData = data;
       const badgeCls = data.verdict === "go" ? "pass" : data.verdict === "almost" ? "warn" : "bad";
       const verdictText = data.verdict === "go"
@@ -270,6 +333,34 @@ export function initReadiness({ onSessionStarted, openWorkspace, openStudio }) {
       critEl.appendChild(renderCriterion("Median Pacing", data.criteria.median_pacing_ratio, "", true));
 
       if (mocksEl) {
+        const chartEl = el("mock-trend-chart");
+        if (chartEl) {
+          const pts = (data.recent_mocks || []).slice().reverse();
+          if (pts.length >= 2) {
+            chartEl.hidden = false;
+            const w = 320;
+            const h = 72;
+            const yAt = (pct) => Math.round(h - 8 - (Math.max(0, Math.min(100, pct)) / 100) * (h - 16));
+            const poly = pts.map((m, idx) => {
+              const x = Math.round(12 + (idx / Math.max(1, pts.length - 1)) * (w - 24));
+              return `${x},${yAt(m.score_pct)}`;
+            }).join(" ");
+            chartEl.innerHTML =
+              `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" role="img" aria-label="Mock exam score trend">`
+              + `<line x1="8" y1="${yAt(66)}" x2="${w - 8}" y2="${yAt(66)}" stroke="var(--warn)" stroke-dasharray="4 3" stroke-width="1"/>`
+              + `<line x1="8" y1="${yAt(80)}" x2="${w - 8}" y2="${yAt(80)}" stroke="var(--pass)" stroke-dasharray="2 3" stroke-width="1"/>`
+              + `<polyline fill="none" stroke="var(--accent)" stroke-width="2" points="${poly}"/>`
+              + pts.map((m, idx) => {
+                const x = Math.round(12 + (idx / Math.max(1, pts.length - 1)) * (w - 24));
+                const col = m.score_pct >= 66 ? "var(--pass)" : "var(--fail)";
+                return `<circle cx="${x}" cy="${yAt(m.score_pct)}" r="3.5" fill="${col}"><title>${m.score_pct}%</title></circle>`;
+              }).join("")
+              + `</svg>`;
+          } else {
+            chartEl.hidden = true;
+            chartEl.innerHTML = "";
+          }
+        }
         mocksEl.innerHTML = "";
         if (!data.recent_mocks.length) {
           mocksEl.innerHTML = '<div class="row">No finished Mock Exams yet — launch a Blind Mock Exam to calibrate your score.</div>';
@@ -280,6 +371,9 @@ export function initReadiness({ onSessionStarted, openWorkspace, openStudio }) {
           const tb = document.createElement("tbody");
           for (const m of data.recent_mocks) {
             const tr = document.createElement("tr");
+            tr.className = "clickable";
+            tr.title = "Click to inspect full post-exam review";
+            tr.onclick = () => openExamReview(m.id, { onOpenCodex });
             const tdTitle = document.createElement("td");
             tdTitle.textContent = m.title;
             const tdVar = document.createElement("td");
@@ -309,6 +403,16 @@ export function initReadiness({ onSessionStarted, openWorkspace, openStudio }) {
   el("btn-drill-replay")?.addEventListener("click", () => startPresetSession("mistake_replay", 5));
   el("btn-drill-blind")?.addEventListener("click", () => startPresetSession("blind_exam", 15));
   el("btn-readiness-refresh")?.addEventListener("click", refresh);
+  el("btn-save-exam-date")?.addEventListener("click", async () => {
+    const val = el("exam-target-date")?.value || "";
+    try {
+      await api("/api/settings/preferences", { method: "PUT", body: { exam_target_date: val } });
+      toast("Target CKA exam date saved", "success");
+      refresh();
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  });
   el("skill-search")?.addEventListener("input", renderSkillTree);
   el("skill-status-filters")?.querySelectorAll("input").forEach((inp) => {
     inp.addEventListener("change", renderSkillTree);

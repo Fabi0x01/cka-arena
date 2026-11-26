@@ -1748,4 +1748,53 @@
     color: var(--ink-muted);
     margin-block-end: var(--sp-3);
   }
+
+  .triage-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    margin-block: 8px 10px;
+    border-radius: var(--r-sm);
+    border: 1px solid var(--warn-border);
+    background: var(--warn-tint);
+    color: var(--warn);
+    font: 500 var(--text-xs) / 1.35 var(--mono);
+  }
+
+  .trend-chart {
+    margin-block-end: 10px;
+    padding: 8px 10px;
+    border-radius: var(--r-sm);
+    border: 1px solid var(--line-subtle);
+    background: var(--surface);
+  }
+
+  .review-card {
+    padding: 10px 12px;
+    margin-block-end: 10px;
+    border-radius: var(--r-sm);
+    border: 1px solid var(--line-subtle);
+    background: var(--surface);
+  }
+
+  .review-card.pass { border-left: 3px solid var(--pass); }
+  .review-card.fail { border-left: 3px solid var(--fail); }
+
+  .review-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-block-end: 6px;
+  }
+
+  .score-table tr.clickable {
+    cursor: pointer;
+  }
+
+  .score-table tr.clickable:hover td {
+    background: var(--accent-tint);
+  }
 }

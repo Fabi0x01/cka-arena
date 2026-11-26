@@ -22,6 +22,17 @@ TOPICS: tuple[StudyTopic, ...] = tuple(
     )
 )
 TOPICS_BY_ID: dict[str, StudyTopic] = {topic.id: topic for topic in TOPICS}
+ARCHETYPE_TO_TOPIC_ID: dict[str, str] = {
+    aid: topic.id
+    for topic in TOPICS
+    for aid in topic.archetype_ids
+}
+
+
+def topic_id_for_archetype(archetype_id: str | None) -> str | None:
+    if not archetype_id:
+        return None
+    return ARCHETYPE_TO_TOPIC_ID.get(archetype_id)
 
 STAGE_XP: dict[str, int] = {
     "theory": 25,
@@ -168,9 +179,13 @@ def get_overview() -> dict[str, Any]:
                 " GROUP BY archetype_id"
             ).fetchall()
         }
+        mastery_rows = {
+            r["archetype_id"]: dict(r)
+            for r in conn.execute("SELECT archetype_id, mastery_score, passes FROM archetype_mastery").fetchall()
+        }
         mastery_scores = {
-            r["archetype_id"]: float(r["mastery_score"] or 0.0)
-            for r in conn.execute("SELECT archetype_id, mastery_score FROM archetype_mastery").fetchall()
+            aid: float(row["mastery_score"] or 0.0)
+            for aid, row in mastery_rows.items()
         }
 
     total_xp = 0
@@ -210,6 +225,7 @@ def get_overview() -> dict[str, Any]:
         arch_bank = sum(bank_counts.get(aid, 0) for aid in topic.archetype_ids)
         practiced_scores = [mastery_scores[aid] for aid in topic.archetype_ids if aid in mastery_scores]
         mastery_avg = round(sum(practiced_scores) / len(practiced_scores), 1) if practiced_scores else None
+        lab_verified = any(aid in mastery_rows and int(mastery_rows[aid].get("passes") or 0) > 0 for aid in topic.archetype_ids)
         search_terms = [
             topic.id,
             topic.title,
@@ -235,6 +251,7 @@ def get_overview() -> dict[str, Any]:
             "archetype_ids": list(topic.archetype_ids),
             "bank_count": arch_bank,
             "mastery_avg": mastery_avg,
+            "lab_verified": lab_verified,
             "progress": prog,
             "search_blob": " ".join(search_terms).lower(),
         })
@@ -389,6 +406,7 @@ def get_topic(topic_id: str) -> dict[str, Any] | None:
         "quizzes": quizzes_payload,
         "quiz": quizzes_payload[0],
         "archetypes": archetypes_detail,
+        "lab_verified": any(int((mastery_rows.get(aid) or {}).get("passes") or 0) > 0 for aid in topic.archetype_ids),
         "progress": prog,
         "stage_xp": STAGE_XP,
         "prev_topic_id": prev_id,

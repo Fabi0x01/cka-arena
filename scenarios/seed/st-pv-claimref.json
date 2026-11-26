@@ -11,7 +11,7 @@
   "difficulty": "killer_hardcore",
   "weight": 7,
   "estimated_minutes": 5,
-  "prompt": "In namespace `cka-st-pv`, PersistentVolumeClaim `pvc-data` stays `Pending`: PersistentVolume `pv-data` is pre-bound to a different claim via `claimRef`.\n\nPerform the following tasks:\n1. Fix PersistentVolume `pv-data` so PersistentVolumeClaim `pvc-data` binds to it.\n2. Do not delete the PersistentVolume or the claim.\n3. Make the Pod of Deployment `web` become `Ready`.",
+  "prompt": "In namespace `cka-st-pv`, PersistentVolumeClaim `pvc-data` stays `Pending` despite matching storage capacity and access mode with `pv-data`.\n\nPerform the following tasks:\n1. Investigate and fix PersistentVolume `pv-data` so PersistentVolumeClaim `pvc-data` binds cleanly.\n2. Do not delete PersistentVolume `pv-data` or claim `pvc-data`.\n3. Ensure Deployment `web` in namespace `cka-st-pv` becomes `Ready`.",
   "copy_tokens": [
     "cka-st-pv",
     "pvc-data",
@@ -48,7 +48,8 @@
         "operator": "equals",
         "expected": "Bound"
       },
-      "failure_hint": "The PV is pre-bound to other-pvc \u2014 remove the stale claimRef."
+      "failure_hint": "The PV is pre-bound to other-pvc \u2014 remove the stale claimRef.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-pv",
@@ -58,7 +59,8 @@
         "kind": "pv",
         "name": "pv-data"
       },
-      "failure_hint": "Do not delete the PersistentVolume."
+      "failure_hint": "Do not delete the PersistentVolume.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-pv-capacity",
@@ -71,7 +73,8 @@
         "operator": "equals",
         "expected": "1Gi"
       },
-      "failure_hint": "Keep the PV capacity at 1Gi."
+      "failure_hint": "Keep the PV capacity at 1Gi.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-pod-ready",
@@ -82,7 +85,8 @@
         "label_selector": "app=web",
         "min_ready": 1
       },
-      "failure_hint": "The Pod cannot start until the claim binds."
+      "failure_hint": "The Pod cannot start until the claim binds.",
+      "weight_ratio": 1.0
     }
   ],
   "solution": {

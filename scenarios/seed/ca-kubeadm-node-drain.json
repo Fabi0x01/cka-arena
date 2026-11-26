@@ -1,0 +1,92 @@
+{
+  "schema_version": "1.2",
+  "id": "seed-ca-kubeadm-node-drain",
+  "title": "Drain Worker Node for Maintenance",
+  "domain": "Cluster Architecture, Installation & Configuration",
+  "subtopics": ["drain", "cordon", "maintenance", "kubectl"],
+  "difficulty": "killer_hardcore",
+  "weight": 7,
+  "estimated_minutes": 5,
+  "prompt": "Worker node `node02` requires OS package maintenance without interrupting running `drain-web` replicas in namespace `cka-drain`.\n\nPerform the following tasks:\n1. Safely cordon and drain `node02` (ignore DaemonSets, delete emptyDir data, and use `--force` if unmanaged Pods exist) so no Pods of Deployment `drain-web` remain scheduled on `node02`.\n2. Record maintenance completion by creating `/opt/maintenance/node02.done` containing `DRAINED` on `node02`.\n3. Keep `node02` cordoned (`SchedulingDisabled`) until maintenance verification completes.",
+  "copy_tokens": ["node02", "drain-web", "cka-drain", "/opt/maintenance/node02.done", "DRAINED"],
+  "docs_links": [
+    {"label": "Safely Drain a Node", "url": "https://kubernetes.io/docs/tasks/administer-cluster/safely-drain-node/"}
+  ],
+  "hints": [
+    "Run `kubectl drain node02 --ignore-daemonsets --delete-emptydir-data --force` from your workstation.",
+    "SSH to `node02` and run `sudo mkdir -p /opt/maintenance && echo DRAINED | sudo tee /opt/maintenance/node02.done`."
+  ],
+  "fast_solution_commands": [
+    "k drain node02 --ignore-daemonsets --delete-emptydir-data --force",
+    "ssh node02 'sudo mkdir -p /opt/maintenance && echo DRAINED | sudo tee /opt/maintenance/node02.done'"
+  ],
+  "setup": {
+    "namespaces": ["cka-drain"],
+    "manifests": [
+      "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: drain-web\n  namespace: cka-drain\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: drain-web\n  template:\n    metadata:\n      labels:\n        app: drain-web\n    spec:\n      containers:\n      - name: web\n        image: nginx:1.27-alpine\n        ports:\n        - containerPort: 80\n---\napiVersion: v1\nkind: Service\nmetadata:\n  name: drain-web\n  namespace: cka-drain\nspec:\n  selector:\n    app: drain-web\n  ports:\n  - port: 80\n    targetPort: 80\n"
+    ]
+  },
+  "checks": [
+    {
+      "id": "chk-node02-cordoned",
+      "description": "Node `node02` is cordoned (`unschedulable: true`)",
+      "type": "kubectl_jsonpath",
+      "params": {"kind": "node", "name": "node02", "jsonpath": "{.spec.unschedulable}", "operator": "equals", "expected": "true"},
+      "weight_ratio": 1.0
+    },
+    {
+      "id": "chk-workloads-healthy",
+      "description": "Deployment `drain-web` keeps 2 ready replicas off `node02`",
+      "type": "deployment_rollout_ready",
+      "params": {"namespace": "cka-drain", "name": "drain-web", "min_ready_replicas": 2},
+      "weight_ratio": 1.0
+    },
+    {
+      "id": "chk-no-pods-on-node02",
+      "description": "No `drain-web` pods remain scheduled on `node02`",
+      "type": "kubectl_jsonpath",
+      "params": {"kind": "pod", "namespace": "cka-drain", "label_selector": "app=drain-web", "jsonpath": "{.items[*].spec.nodeName}", "operator": "not_contains", "expected": "node02"},
+      "weight_ratio": 1.0
+    },
+    {
+      "id": "chk-maint-marker",
+      "description": "Maintenance marker `/opt/maintenance/node02.done` contains `DRAINED`",
+      "type": "host_file_contains",
+      "params": {"location": "node02", "path": "/opt/maintenance/node02.done", "regex_patterns": ["DRAINED"]},
+      "weight_ratio": 0.5
+    }
+  ],
+  "solution": {
+    "manifests": [],
+    "commands": [
+      "kubectl drain node02 --ignore-daemonsets --delete-emptydir-data --force",
+      "kubectl -n cka-drain rollout status deployment/drain-web --timeout=60s"
+    ],
+    "node_commands": [
+      {
+        "node": "node02",
+        "sudo": true,
+        "backup_paths": [],
+        "command": "mkdir -p /opt/maintenance && echo DRAINED > /opt/maintenance/node02.done"
+      }
+    ]
+  },
+  "cleanup": {
+    "namespaces": ["cka-drain"],
+    "commands": [
+      "kubectl uncordon node02"
+    ],
+    "node_commands": [
+      {
+        "node": "node02",
+        "sudo": true,
+        "backup_paths": [],
+        "command": "rm -r -f /opt/maintenance"
+      }
+    ]
+  },
+  "reference_solution": "Drain `node02` with `--ignore-daemonsets --delete-emptydir-data`, then write `/opt/maintenance/node02.done` on `node02`.",
+  "destructive": true,
+  "archetype_id": "ca-kubeadm-node-drain",
+  "context_command": "kubectl config use-context cka"
+}

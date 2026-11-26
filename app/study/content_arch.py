@@ -309,8 +309,8 @@ ARCH_TOPICS: tuple[StudyTopic, ...] = (
         ),
         theory_points=(
             "Always read exact TLS paths (`--trusted-ca-file`, `--cert-file`, `--key-file`) and listen endpoints directly from `/etc/kubernetes/manifests/etcd.yaml`.",
-            "Set `ETCDCTL_API=3` before `etcdctl` (legacy v2 defaults break `snapshot save`); modern Kubernetes v1.30+ clusters may prefer `etcdutl snapshot restore`, while `etcdctl snapshot save` remains the backup CLI.",
-            "Never overwrite a live `/var/lib/etcd` directory while etcd is running — always restore into a NEW `--data-dir` (e.g. `/var/lib/etcd-restored`).",
+            "Set `ETCDCTL_API=3` before `etcdctl` (legacy v2 defaults break `snapshot save`); modern Kubernetes v1.34+ clusters prefer `etcdutl` for `snapshot status` and `snapshot restore`, while `etcdctl snapshot save` remains the live backup CLI.",
+            "Never overwrite a live `/var/lib/etcd` directory while etcd is running — always restore into a NEW `--data-dir` (e.g. `/var/lib/etcd-restored`), passing `--name`, `--initial-cluster`, and `--initial-advertise-peer-urls` matching `/etc/kubernetes/manifests/etcd.yaml` for kubeadm stacked etcd.",
             "Inside `/etc/kubernetes/manifests/etcd.yaml`, container `volumeMounts` keep mounting `/var/lib/etcd`, so you MUST update `spec.volumes[name=etcd-data].hostPath.path` (and `--data-dir` only if hostPath wasn't abstracted).",
             "For an external etcd cluster (non-stacked), pass `--endpoints=https://<ETCD_HOST_IP>:2379` (listed in `kube-apiserver.yaml --etcd-servers`), NOT `127.0.0.1`.",
             "After editing `etcd.yaml`, expect 15–45 seconds of `kubectl` TLS/connection-refused retries while `kubelet` recreates `etcd` and `kube-apiserver` static Pods; watch directly with `sudo crictl ps`.",
@@ -345,13 +345,13 @@ ARCH_TOPICS: tuple[StudyTopic, ...] = (
                     "--cert=/etc/kubernetes/pki/etcd/server.crt "
                     "--key=/etc/kubernetes/pki/etcd/server.key snapshot save /opt/backup/etcd.db"
                 ),
-                verify_command="sudo ETCDCTL_API=3 etcdctl snapshot status /opt/backup/etcd.db -w table",
+                verify_command="sudo etcdutl snapshot status /opt/backup/etcd.db -w table",
                 expected_output="Table showing HASH, REVISION, TOTAL KEYS, and non-zero TOTAL SIZE",
             ),
             PracticeStep(
                 title="Restore offline to fresh data-dir and repoint `etcd.yaml`",
                 explanation="Unpack to `/var/lib/etcd-restored`, swap `volumes[name=etcd-data].hostPath.path`, and verify via `crictl`.",
-                command="sudo ETCDCTL_API=3 etcdctl snapshot restore /opt/backup/etcd.db --data-dir=/var/lib/etcd-restored",
+                command="sudo etcdutl snapshot restore /opt/backup/etcd.db --data-dir=/var/lib/etcd-restored",
                 yaml_snippet=(
                     "# Inside /etc/kubernetes/manifests/etcd.yaml:\n"
                     "volumes:\n"
@@ -375,8 +375,8 @@ ARCH_TOPICS: tuple[StudyTopic, ...] = (
         cheatsheet=(
             CheatItem("Inspect etcd certs", "sudo grep -E 'ca|cert|key|data-dir' /etc/kubernetes/manifests/etcd.yaml", "Run on controlplane"),
             CheatItem("Snapshot save", "sudo ETCDCTL_API=3 etcdctl --endpoints=https://127.0.0.1:2379 --cacert=/etc/kubernetes/pki/etcd/ca.crt --cert=/etc/kubernetes/pki/etcd/server.crt --key=/etc/kubernetes/pki/etcd/server.key snapshot save /tmp/etcd.db", "Live encrypted snapshot"),
-            CheatItem("Verify snapshot", "sudo ETCDCTL_API=3 etcdctl snapshot status /tmp/etcd.db -w table", "Confirms valid snapshot file"),
-            CheatItem("Snapshot restore", "sudo ETCDCTL_API=3 etcdctl snapshot restore /tmp/etcd.db --data-dir=/var/lib/etcd-restored", "Or use `etcdutl snapshot restore`"),
+            CheatItem("Verify snapshot", "sudo etcdutl snapshot status /tmp/etcd.db -w table", "Confirms valid snapshot file (etcdctl fallback if absent)"),
+            CheatItem("Snapshot restore", "sudo etcdutl snapshot restore /tmp/etcd.db --name=<NAME> --initial-cluster=<CLUSTER> --initial-advertise-peer-urls=<PEER> --data-dir=/var/lib/etcd-restored", "Modern v1.34+ offline restore CLI with kubeadm member flags from etcd.yaml"),
             CheatItem("Check static containers", "sudo crictl ps -a | grep -E 'etcd|kube-apiserver'", "Verify clean restart without CrashLoop"),
         ),
         yaml_template=(
@@ -433,7 +433,7 @@ ARCH_TOPICS: tuple[StudyTopic, ...] = (
         subtitle="Upgrade apt/pkgs, controlplane, worker nodes, and kubelet cleanly one minor release at a time.",
         estimated_minutes=6,
         exam_frequency="Critical",
-        archetype_ids=("ca-kubeadm-node-upgrade",),
+        archetype_ids=("ca-kubeadm-node-upgrade", "ca-kubeadm-node-drain"),
         summary=(
             "Upgrading a kubeadm cluster follows a strict minor-version order (`1.X -> 1.X+1`, primary controlplane first, "
             "then workers): drain the node safely, switch apt package repo minor version if bumping minor, unhold/upgrade `kubeadm`, "
@@ -699,7 +699,7 @@ ARCH_TOPICS: tuple[StudyTopic, ...] = (
         subtitle="Master multi-cluster context switching, kubeconfig repairs, `jsonpath`, and `kubectl explain`.",
         estimated_minutes=5,
         exam_frequency="Critical",
-        archetype_ids=("ca-csr-user-auth", "ca-crd-inspect"),
+        archetype_ids=("ca-csr-user-auth", "ca-crd-inspect", "ca-user-kubeconfig-context"),
         summary=(
             "Every CKA task starts with switching context (`kubectl config use-context <ctx>`) or fixing broken `kubeconfig` endpoints/credentials. "
             "Pairing `kubeconfig` mastery with `-o jsonpath`, `-o custom-columns`, `--sort-by`, and `kubectl explain --recursive` eliminates guesswork "

@@ -1,6 +1,6 @@
 // workspace.js — mission launcher, Markdown prompt, subtabs, Quick-Run context pills, checks, hints & postmortem
 import { api } from "./api.js";
-import { el, toast, confirmDialog, copyText } from "./ui.js";
+import { el, toast, confirmDialog, copyText, openDialog, closeDialog, wireDialogBackdropDismiss } from "./ui.js";
 import { iconEl } from "./icons.js";
 import { renderPrompt } from "./markdown.js";
 
@@ -18,7 +18,7 @@ function makeCopyPill(text, onAfter) {
   return span;
 }
 
-export function initWorkspace({ onSessionChanged, onFinished, onBankInvalidated, focusTerminal, sendCommand, onSubmitExam }) {
+export function initWorkspace({ onSessionChanged, onFinished, onBankInvalidated, focusTerminal, sendCommand, onSubmitExam, onOpenCodex }) {
   let session = null;
   let timerHandle = null;
   let checking = false;
@@ -50,11 +50,11 @@ export function initWorkspace({ onSessionChanged, onFinished, onBankInvalidated,
     return lines.join("\n").trimStart();
   }
 
-  function copyAndRunPill(text) {
+  function copyAndRunPill(text, allowRun = true) {
     const wrap = document.createElement("span");
     wrap.className = "pill-wrap-run";
     wrap.appendChild(makeCopyPill(text, focusTerminal));
-    if (sendCommand) {
+    if (sendCommand && allowRun) {
       const runBtn = document.createElement("button");
       runBtn.type = "button";
       runBtn.className = "pill-run";
@@ -251,6 +251,59 @@ export function initWorkspace({ onSessionChanged, onFinished, onBankInvalidated,
     }
   }
 
+  async function refreshEmptyMission() {
+    const box = el("empty-daily-mission");
+    if (!box) return;
+    try {
+      const plan = await api("/api/study-plan/today");
+      if (!plan) {
+        box.hidden = true;
+        return;
+      }
+      box.hidden = false;
+      box.innerHTML = "";
+      const row = document.createElement("div");
+      row.className = "row";
+      row.style.display = "flex";
+      row.style.justifyContent = "space-between";
+      row.style.alignItems = "center";
+      row.style.gap = "8px";
+      const txt = document.createElement("span");
+      txt.textContent = `Today’s Mission: ${plan.headline || `${plan.reviews_due || 0} SRS due`}`;
+      const primaryItem = (plan.items || [])[0];
+      row.appendChild(txt);
+      if (primaryItem) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "btn sm primary";
+        btn.textContent = primaryItem.label || "Start Mission";
+        btn.onclick = async () => {
+          if (primaryItem.action_type === "launch_variant") {
+            launchQuick(primaryItem.variant || "weakness_drill", primaryItem.count || 5);
+          } else if (primaryItem.action_type === "codex_topic" && primaryItem.topic_id && onOpenCodex) {
+            onOpenCodex(primaryItem.topic_id);
+          } else if (primaryItem.archetype_id) {
+            try {
+              await withLoading(`Mounting ${primaryItem.archetype_id}…`, async () => {
+                const payload = await api("/api/practice", {
+                  method: "POST",
+                  body: { count: 1, mode: "study", archetype_id: primaryItem.archetype_id },
+                });
+                setSession(payload);
+              });
+            } catch (err) {
+              toast(err.message, "error");
+            }
+          }
+        };
+        row.appendChild(btn);
+      }
+      box.appendChild(row);
+    } catch {
+      box.hidden = true;
+    }
+  }
+
   function render() {
     const empty = el("workspace-empty");
     const body = el("workspace-body");
@@ -272,6 +325,7 @@ export function initWorkspace({ onSessionChanged, onFinished, onBankInvalidated,
     if (!active) {
       empty.hidden = false;
       body.hidden = true;
+      refreshEmptyMission();
       checkBtn.hidden = false;
       checkBtn.disabled = true;
       if (termCheckBtn) {
@@ -286,8 +340,11 @@ export function initWorkspace({ onSessionChanged, onFinished, onBankInvalidated,
       }
       nextBtn.disabled = true;
       nextBtn.classList.remove("next-ready");
+      if (el("btn-prev")) el("btn-prev").hidden = true;
       el("btn-reset").disabled = true;
+      el("btn-skip").hidden = false;
       el("btn-skip").disabled = true;
+      if (el("q-triage-alert")) el("q-triage-alert").hidden = true;
       flagBtn.hidden = true;
       retireBtn.disabled = true;
       drawer.hidden = true;
@@ -324,9 +381,10 @@ export function initWorkspace({ onSessionChanged, onFinished, onBankInvalidated,
 
     const context = el("q-context");
     context.innerHTML = "";
-    if (envelope.context_command) context.appendChild(copyAndRunPill(envelope.context_command));
+    const allowRun = !isBlindActive;
+    if (envelope.context_command) context.appendChild(copyAndRunPill(envelope.context_command, allowRun));
     const sshCmd = resolveSshCommand(envelope);
-    if (sshCmd) context.appendChild(copyAndRunPill(sshCmd));
+    if (sshCmd) context.appendChild(copyAndRunPill(sshCmd, allowRun));
 
     const bodyText = stripExamHeader(envelope.prompt, envelope.title);
     renderPrompt(el("q-prompt"), bodyText, { focusAfter: focusTerminal });
@@ -345,14 +403,27 @@ export function initWorkspace({ onSessionChanged, onFinished, onBankInvalidated,
     }
 
     const docs = el("q-docs");
+    const docsSection = el("q-docs-section");
     docs.innerHTML = "";
-    for (const link of envelope.docs_links || []) {
-      const anchor = document.createElement("a");
-      anchor.href = link.url;
-      anchor.target = "_blank";
-      anchor.rel = "noreferrer";
-      anchor.append(iconEl("externalLink", 13), document.createTextNode(link.label));
-      docs.appendChild(anchor);
+    docs.hidden = isBlindActive;
+    if (docsSection) docsSection.hidden = isBlindActive;
+    if (!isBlindActive) {
+      for (const link of envelope.docs_links || []) {
+        const anchor = document.createElement("a");
+        anchor.href = link.url;
+        anchor.target = "_blank";
+        anchor.rel = "noreferrer";
+        anchor.append(iconEl("externalLink", 13), document.createTextNode(link.label));
+        docs.appendChild(anchor);
+      }
+      if (envelope.codex_topic_id && onOpenCodex) {
+        const codexLink = document.createElement("button");
+        codexLink.type = "button";
+        codexLink.className = "btn sm ghost";
+        codexLink.textContent = "Study Concept in Codex →";
+        codexLink.onclick = () => onOpenCodex(envelope.codex_topic_id);
+        docs.appendChild(codexLink);
+      }
     }
 
     const done = active.item_state !== "active";
@@ -363,6 +434,12 @@ export function initWorkspace({ onSessionChanged, onFinished, onBankInvalidated,
       termCheckBtn.disabled = done || isBlindActive;
     }
     if (submitExamBtn) submitExamBtn.hidden = !isBlindActive;
+    const prevBtn = el("btn-prev");
+    if (prevBtn) {
+      prevBtn.hidden = !isMock;
+      prevBtn.disabled = !isMock || active.order_index <= 0;
+    }
+    el("btn-skip").hidden = isMock;
 
     const usedHints = Number(active.hints_used || 0);
     if (el("q-hint-badge")) el("q-hint-badge").textContent = `${usedHints}/3`;
@@ -439,9 +516,14 @@ export function initWorkspace({ onSessionChanged, onFinished, onBankInvalidated,
   function startTimer(active) {
     stopTimer(false);
     const total = Math.max(60, (active.envelope.estimated_minutes || 5) * 60);
-    const startMs = (active.started_at || Date.now() / 1000) * 1000;
+    const triageEl = el("q-triage-alert");
+    if (triageEl) triageEl.hidden = true;
+    const isMock = session?.session?.mode === "mock_exam";
+    const priorSeconds = Number(active.active_seconds || 0);
+    const enteredAt = active.last_entered_at || active.started_at;
     const tick = () => {
-      const elapsed = Math.max(0, (Date.now() - startMs) / 1000);
+      const liveDelta = enteredAt ? Math.max(0, Date.now() / 1000 - enteredAt) : 0;
+      const elapsed = priorSeconds + liveDelta;
       const remaining = Math.max(0, total - elapsed);
       const timer = el("q-timer");
       timer.textContent = `${fmt(elapsed)} / ${fmt(total)}`;
@@ -453,6 +535,9 @@ export function initWorkspace({ onSessionChanged, onFinished, onBankInvalidated,
       if (fill) {
         fill.style.setProperty("--p", String(Math.min(1, elapsed / total)));
         fill.className = "q-progress-fill" + (isBad ? " bad" : isWarn ? " warn" : "");
+      }
+      if (triageEl) {
+        triageEl.hidden = !(isMock && elapsed > total * 1.5);
       }
     };
     tick();
@@ -635,6 +720,18 @@ export function initWorkspace({ onSessionChanged, onFinished, onBankInvalidated,
     }
   }
 
+  async function prev() {
+    if (!session) return;
+    try {
+      await withLoading("Loading previous scenario…", async () => {
+        const result = await api(`/api/sessions/${session.session.id}/prev`, { method: "POST" });
+        if (result.session) setSession(result.session);
+      });
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  }
+
   async function selectItem(itemId) {
     if (!session) return;
     try {
@@ -660,26 +757,49 @@ export function initWorkspace({ onSessionChanged, onFinished, onBankInvalidated,
     }
   }
 
-  async function retireActive() {
+  async function submitRetire(reasonCode, reasonNote) {
     if (!session?.active) return;
-    const ok = await confirmDialog(
-      "Report & retire this question?",
-      "It will be retired from your bank (never drawn again) and skipped in this session.",
-    );
-    if (!ok) return;
     try {
       await withLoading("Retiring question & cleaning cluster…", async () => {
         const updated = await api(`/api/sessions/${session.session.id}/retire`, {
           method: "POST",
-          body: { reason: "reported by user in workspace" },
+          body: { reason_code: reasonCode || "other", reason: reasonNote || reasonCode || "reported by user" },
         });
         setSession(updated);
         onBankInvalidated?.();
-        toast("Question retired from bank", "success");
+        toast("Question retired & feedback recorded", "success");
       });
     } catch (error) {
       toast(error.message, "error");
     }
+  }
+
+  async function retireActive() {
+    if (!session?.active) return;
+    const modal = el("report-modal");
+    if (!modal) {
+      const ok = await confirmDialog(
+        "Report & retire this question?",
+        "It will be retired from your bank (never drawn again) and skipped in this session.",
+      );
+      if (ok) await submitRetire("other", "reported by user in workspace");
+      return;
+    }
+    const noteEl = el("report-reason-note");
+    if (noteEl) noteEl.value = "";
+    openDialog(modal);
+  }
+
+  const reportModal = el("report-modal");
+  if (reportModal) {
+    wireDialogBackdropDismiss(reportModal);
+    el("report-cancel")?.addEventListener("click", () => closeDialog(reportModal));
+    el("report-submit")?.addEventListener("click", async () => {
+      const code = el("report-reason-code")?.value || "other";
+      const note = el("report-reason-note")?.value.trim() || code;
+      closeDialog(reportModal);
+      await submitRetire(code, note);
+    });
   }
 
   async function skip() {
@@ -719,6 +839,7 @@ export function initWorkspace({ onSessionChanged, onFinished, onBankInvalidated,
 
   el("btn-check").onclick = check;
   el("btn-next").onclick = next;
+  el("btn-prev")?.addEventListener("click", prev);
   el("btn-skip").onclick = skip;
   el("btn-reset").onclick = reset;
   el("btn-flag").onclick = toggleFlag;

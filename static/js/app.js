@@ -1,20 +1,27 @@
 // app.js — Orbital Control Console shell, rail navigation, View Transitions, Command Palette (⌘K), dialogs
-import { api, createEventBus } from "./api.js";
-import { el, toast, openDialog, closeDialog, wireDialogBackdropDismiss } from "./ui.js";
-import { iconEl } from "./icons.js?v=3.4";
-import { initPower } from "./power.js";
-import { initTerminal } from "./terminal.js?v=3.4";
-import { initWorkspace } from "./workspace.js";
-import { initStudio } from "./studio.js?v=3.4";
-import { initReadiness } from "./readiness.js";
-import { initStudy } from "./study.js?v=3.7";
-import { initSettings } from "./settings.js";
-import { initPalette } from "./palette.js";
+import { api, createEventBus } from "./api.js?v=4.0";
+import { el, toast, openDialog, closeDialog, wireDialogBackdropDismiss } from "./ui.js?v=4.0";
+import { iconEl } from "./icons.js?v=4.0";
+import { initPower } from "./power.js?v=4.0";
+import { initTerminal } from "./terminal.js?v=4.0";
+import { initWorkspace } from "./workspace.js?v=4.0";
+import { initStudio } from "./studio.js?v=4.0";
+import { initReadiness } from "./readiness.js?v=4.0";
+import { initStudy } from "./study.js?v=4.0";
+import { initSettings } from "./settings.js?v=4.0";
+import { initPalette } from "./palette.js?v=4.0";
+import { openExamReview } from "./review.js?v=4.0";
 
 const bus = createEventBus();
 const state = { session: null, cluster: null, bank: null, panel: null };
 let examTimerHandle = null;
 let expiredNotifiedId = null;
+let lastFinishedSessionId = null;
+
+function openCodexTopic(topicId) {
+  showPanel("study");
+  study.selectTopic?.(topicId);
+}
 
 const terminal = initTerminal();
 const workspace = initWorkspace({
@@ -27,6 +34,7 @@ const workspace = initWorkspace({
   onFinished: (session) => openEndModal(session),
   onSubmitExam: (session) => openEndModal(session),
   onBankInvalidated: () => studio.refreshCoverage(),
+  onOpenCodex: (topicId) => openCodexTopic(topicId),
   focusTerminal: () => terminal.focus(),
   sendCommand: (cmd) => {
     if (document.body.classList.contains("native-mode")) toggleNative(false);
@@ -59,6 +67,7 @@ const readiness = initReadiness({
   },
   openWorkspace: () => showPanel(null),
   openStudio: () => showPanel("studio"),
+  onOpenCodex: (topicId) => openCodexTopic(topicId),
 });
 const study = initStudy({
   onSessionStarted: (session) => {
@@ -262,7 +271,7 @@ const palette = initPalette({
       { group: "Terminal & Nodes", label: "Increase Terminal Font", icon: "plus", shortcut: "⌘+", run: () => { showPanel(null); terminal.adjustFont?.(1); } },
       { group: "Terminal & Nodes", label: "Decrease Terminal Font", icon: "command", shortcut: "⌘-", run: () => { showPanel(null); terminal.adjustFont?.(-1); } },
       { group: "Terminal & Nodes", label: "Reset Terminal Font", icon: "refreshCw", shortcut: "⌘0", run: () => { showPanel(null); terminal.resetFont?.(); } },
-      { group: "Terminal & Nodes", label: "Open Local Scratch Tab", icon: "terminal", run: () => { showPanel(null); toggleNative(false); terminal.openTab("host", null, "mac"); } },
+      { group: "Terminal & Nodes", label: "Open Local Scratch Tab", icon: "terminal", run: () => { showPanel(null); toggleNative(false); terminal.openTab("host", null, "workstation"); } },
       { group: "Terminal & Nodes", label: "Open SSH: controlplane", icon: "server", run: () => { showPanel(null); toggleNative(false); terminal.openTab("node", "controlplane", "controlplane"); } },
       { group: "Terminal & Nodes", label: "Open SSH: node01", icon: "server", run: () => { showPanel(null); toggleNative(false); terminal.openTab("node", "node01", "node01"); } },
       { group: "Terminal & Nodes", label: "Open SSH: node02", icon: "server", run: () => { showPanel(null); toggleNative(false); terminal.openTab("node", "node02", "node02"); } },
@@ -407,6 +416,7 @@ function openEndModal(session, { early = false, timedOut = false } = {}) {
   el("end-finish").dataset.label = finishLabel;
   el("end-finish").hidden = false;
   el("end-cancel").hidden = false;
+  if (el("end-review")) el("end-review").hidden = true;
   el("end-close").hidden = true;
   openDialog(endDialog);
 }
@@ -474,6 +484,15 @@ el("end-finish").onclick = async () => {
     el("end-cleanup-field").style.display = "none";
     el("end-cancel").hidden = true;
     button.hidden = true;
+    lastFinishedSessionId = result.session_id;
+    const revBtn = el("end-review");
+    if (revBtn) {
+      revBtn.hidden = false;
+      revBtn.onclick = () => {
+        closeDialog(endDialog);
+        openExamReview(lastFinishedSessionId, { onOpenCodex: (tid) => openCodexTopic(tid) });
+      };
+    }
     el("end-close").hidden = false;
     endingSession = null;
     workspace.clear();

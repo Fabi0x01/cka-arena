@@ -87,7 +87,52 @@ if command -v kubectl >/dev/null 2>&1; then
   elif [ -n "${BASH_VERSION:-}" ]; then
     source <(kubectl completion bash) 2>/dev/null || true
     complete -o default -F __start_kubectl k 2>/dev/null || true
-    PROMPT_COMMAND='history 1 | sed "s/^[ ]*[0-9]*[ ]*//" >> "$CKA_ARENA_WORKDIR/.cmd_history.log" 2>/dev/null || true'
+    _cka_last_hist_id=""
+    _cka_bash_prompt() {
+      local line num cmd
+      line="$(HISTTIMEFORMAT= history 1 2>/dev/null || true)"
+      num="${line%%[^ 0-9]*}"
+      num="${num// /}"
+      if [ -n "$num" ] && [ "$num" != "$_cka_last_hist_id" ]; then
+        _cka_last_hist_id="$num"
+        cmd="$(printf '%s' "$line" | sed 's/^[ ]*[0-9]*[ ]*//')"
+        [ -n "$cmd" ] && printf '%s\n' "$cmd" >> "$CKA_ARENA_WORKDIR/.cmd_history.log" 2>/dev/null || true
+      fi
+    }
+    PROMPT_COMMAND="_cka_bash_prompt"
+  fi
+fi
+"""
+
+_CKA_STRICT_ENV_SH = r"""# CKA Arena Strict PSI Shell Profile (no pre-exported $do/$now shortcuts)
+if command -v vim >/dev/null 2>&1; then
+  export KUBE_EDITOR=vim
+  export EDITOR=vim
+  export VISUAL=vim
+fi
+if command -v kubectl >/dev/null 2>&1; then
+  if [ -n "${ZSH_VERSION:-}" ]; then
+    autoload -Uz compinit 2>/dev/null && compinit -C -d "$CKA_ARENA_WORKDIR/.zcompdump" 2>/dev/null
+    source <(kubectl completion zsh) 2>/dev/null || true
+    _cka_preexec() {
+      [ -n "$1" ] && printf '%s\n' "$1" >> "$CKA_ARENA_WORKDIR/.cmd_history.log" 2>/dev/null || true
+    }
+    autoload -Uz add-zsh-hook 2>/dev/null && add-zsh-hook preexec _cka_preexec 2>/dev/null || true
+  elif [ -n "${BASH_VERSION:-}" ]; then
+    source <(kubectl completion bash) 2>/dev/null || true
+    _cka_last_hist_id=""
+    _cka_bash_prompt() {
+      local line num cmd
+      line="$(HISTTIMEFORMAT= history 1 2>/dev/null || true)"
+      num="${line%%[^ 0-9]*}"
+      num="${num// /}"
+      if [ -n "$num" ] && [ "$num" != "$_cka_last_hist_id" ]; then
+        _cka_last_hist_id="$num"
+        cmd="$(printf '%s' "$line" | sed 's/^[ ]*[0-9]*[ ]*//')"
+        [ -n "$cmd" ] && printf '%s\n' "$cmd" >> "$CKA_ARENA_WORKDIR/.cmd_history.log" 2>/dev/null || true
+      fi
+    }
+    PROMPT_COMMAND="_cka_bash_prompt"
   fi
 fi
 """
@@ -149,12 +194,12 @@ def _resolve_host_shell(env: dict[str, str]) -> str:
     return "/bin/sh"
 
 
-def write_exam_shell_files(workdir: Path) -> None:
+def write_exam_shell_files(workdir: Path, *, strict_psi: bool = False) -> None:
     """Create isolated .vimrc, .cka_env.sh, .zshrc, and .bashrc inside scratch workdir."""
     workdir.mkdir(parents=True, exist_ok=True)
     (workdir / "tmp").mkdir(parents=True, exist_ok=True)
-    (workdir / ".vimrc").write_text(EXAM_VIMRC_TEXT)
-    (workdir / ".cka_env.sh").write_text(_CKA_ENV_SH)
+    (workdir / ".vimrc").write_text("set nocompatible\n" if strict_psi else EXAM_VIMRC_TEXT)
+    (workdir / ".cka_env.sh").write_text(_CKA_STRICT_ENV_SH if strict_psi else _CKA_ENV_SH)
     (workdir / ".zshrc").write_text(_ZSHRC_TEXT)
     (workdir / ".bashrc").write_text(_BASHRC_TEXT)
 
@@ -239,6 +284,7 @@ class TerminalSession:
     tab_id: str
     preset: str
     node: str | None = None
+    strict_psi: bool = False
     created_at: float = field(default_factory=time.time)
     last_activity: float = field(default_factory=time.time)
     master_fd: int = -1
@@ -258,7 +304,7 @@ class TerminalSession:
         if self.preset == "host":
             config.ensure_dirs()
             self.workdir = scratch_dir(self.tab_id)
-            write_exam_shell_files(self.workdir)
+            write_exam_shell_files(self.workdir, strict_psi=self.strict_psi)
             assets_link = self.workdir / "assets"
             if config.ASSETS_DIR.is_dir() and not assets_link.exists():
                 try:
@@ -410,14 +456,14 @@ class TerminalRegistry:
     def __init__(self) -> None:
         self._sessions: dict[str, TerminalSession] = {}
 
-    def create(self, preset: str, node: str | None = None) -> TerminalSession:
+    def create(self, preset: str, node: str | None = None, *, strict_psi: bool = False) -> TerminalSession:
         if preset not in ("host", "node"):
             raise TerminalError(f"preset inválido: {preset}")
         alive = [s for s in self._sessions.values() if s.exit_status is None]
         if len(alive) >= MAX_TABS:
             raise TerminalError(f"limite de {MAX_TABS} abas ativas")
         tab_id = uuid.uuid4().hex[:10]
-        session = TerminalSession(tab_id=tab_id, preset=preset, node=node)
+        session = TerminalSession(tab_id=tab_id, preset=preset, node=node, strict_psi=strict_psi)
         self._sessions[tab_id] = session  # shell só nasce quando o xterm conecta (spawn lazy)
         return session
 

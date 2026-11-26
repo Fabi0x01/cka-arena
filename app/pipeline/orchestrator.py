@@ -27,14 +27,16 @@ from app.pipeline.gates import (
     tier_band_errors,
     validate_gates,
 )
-from app.pipeline.prober import ScenarioProber
+from app.pipeline.prober import ProbeOutcome, ScenarioProber
 from app.pipeline.prompts import (
     _HARD_EXAMPLE,
+    ARCHITECT_SYSTEM,
     BUILDER_MAX_TOKENS,
     BUILDER_SYSTEM,
     HARD_TIER_ADDENDUM,
     NORMALIZER_MAX_TOKENS,
     NORMALIZER_SYSTEM,
+    POLISH_SYSTEM,
     REPAIR_SYSTEM,
     REVIEW_MAX_TOKENS,
     REVIEWER_SYSTEM,
@@ -54,6 +56,7 @@ class GenerateRequest(BaseModel):
     count: int = Field(default=3, ge=1, le=15)
     focus_hint: str | None = None
     target_archetype_id: str | None = None
+    target_archetypes: list[str] | None = None
 
 
 class GenerationRequestModel(BaseModel):
@@ -84,6 +87,8 @@ class GenerationPipeline:
         self._job: dict | None = None
         self._task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
+        self._last_review_report: dict | None = None
+        self._slot_quality: dict[int, tuple[int | None, dict | None]] = {}
 
     @property
     def engine(self) -> ScenarioEngine:
@@ -194,6 +199,46 @@ class GenerationPipeline:
             GenerateRequest(domains=chosen_domains, difficulty=best_diff, count=count)
         )
         return {"job_id": job_id, "difficulty": best_diff, "domains": chosen_domains, "count": count}
+
+    async def start_fill_archetypes(self, max_count: int = 8) -> dict:
+        """Generate 1 scenario for each curriculum archetype that currently has 0 published questions."""
+        avail = await self._addons_available()
+        with db.connect() as conn:
+            covered = {
+                r["archetype_id"]
+                for r in conn.execute(
+                    "SELECT DISTINCT archetype_id FROM bank_questions"
+                    " WHERE state = 'published' AND archetype_id IS NOT NULL AND archetype_id != ''"
+                ).fetchall()
+            }
+        missing = [
+            arch for arch in curriculum.ARCHETYPES
+            if arch.id not in covered
+            and not arch.destructive
+            and all(req in avail for req in arch.requires_addons)
+        ]
+        selected = missing[: max(1, min(15, max_count))]
+        if not selected:
+            # Fall back to standard gap fill if all non-destructive eligible archetypes are covered
+            return await self.start_fill_gaps(max_count=min(5, max_count))
+        diff = selected[0].difficulties[0] if selected[0].difficulties else "exam_standard"
+        domains = list(dict.fromkeys(a.domain for a in selected))
+        target_ids = [a.id for a in selected]
+        job_id = await self.start(
+            GenerateRequest(
+                domains=domains,
+                difficulty=diff,
+                count=len(target_ids),
+                focus_hint="cover missing curriculum archetypes",
+                target_archetypes=target_ids,
+            )
+        )
+        return {
+            "job_id": job_id,
+            "missing_total": len(missing),
+            "target_archetypes": target_ids,
+            "count": len(target_ids),
+        }
 
     async def cancel(self) -> bool:
         if not self._active_job or not self._task or self._task.done():
@@ -328,7 +373,10 @@ class GenerationPipeline:
                 recent_rows=bank.recent_published(40),
                 seed=job_id,
                 target_archetype_id=request.target_archetype_id,
+                target_archetypes=request.target_archetypes,
+                feedback_pitfalls=bank.recent_feedback_pitfalls(),
             )
+            self._slot_quality.clear()
             self._update(
                 job_id,
                 "A",
@@ -379,15 +427,24 @@ class GenerationPipeline:
                     )
                     return
 
+                q_score, q_report = self._slot_quality.pop(index, (None, None))
                 result = bank.publish_question(
-                    envelope, source="llm", state="published", generator_meta=meta
+                    envelope,
+                    source="llm",
+                    state="published",
+                    generator_meta=meta,
+                    quality_score=q_score,
+                    quality_report=q_report,
                 )
                 published.append(result["id"])
                 job["published"] = published
+                sc_entry = job["scenarios"].get(str(scenario))
+                if isinstance(sc_entry, dict) and q_score is not None:
+                    sc_entry["quality_score"] = q_score
                 self._update(
                     job_id,
                     "publish",
-                    f"published {result['id']}",
+                    f"published {result['id']}" + (f" (Q:{q_score})" if q_score is not None else ""),
                     scenario=scenario,
                     total=normalized.count,
                     status="published",
@@ -469,6 +526,61 @@ class GenerationPipeline:
             return {"ok": True, "state": "published", "error": None}
         bank.update_after_probe(question_id, env, state="draft", probe_result={"error": detail[:800]})
         return {"ok": False, "state": "draft", "error": detail}
+
+    async def polish_question(self, question_id: str) -> dict:
+        """Upgrade an existing question to schema v1.2, run Reviewer C v2 + gates + live probe."""
+        row = bank.get_question(question_id)
+        if not row or not row.get("envelope"):
+            raise ValueError("question not found")
+        env = ScenarioEnvelope.model_validate(row["envelope"])
+        self._enrich_defaults(env)
+
+        user_payload = json.dumps({"envelope": env.model_dump()}, ensure_ascii=False)
+        text, meta = await self.client.complete(
+            [{"role": "system", "content": POLISH_SYSTEM}, {"role": "user", "content": user_payload}],
+            role="main",
+            temperature=0.2,
+            max_tokens=BUILDER_MAX_TOKENS,
+            json_mode=True,
+        )
+        self._db_generation("P", meta, f"polish:{question_id}", text, "ok")
+        data = extract_json(text)
+        merged = env.model_dump()
+        for k in (
+            "schema_version", "prompt", "copy_tokens", "docs_links",
+            "hints", "fast_solution_commands", "reference_solution", "checks",
+        ):
+            if k in data and data[k] not in (None, [], ""):
+                merged[k] = data[k]
+        merged["schema_version"] = "1.2"
+        polished = ScenarioEnvelope.model_validate(merged)
+        self._enrich_defaults(polished)
+        self._clamp_band_scalars(polished)
+        arch = curriculum.ARCHETYPES_BY_ID.get(polished.archetype_id or "")
+        gate_errs = await validate_gates(polished, archetype=arch, require_pedagogy=True)
+        if gate_errs:
+            return {"ok": False, "error": "gates: " + " | ".join(gate_errs)[:400]}
+        verdict, issues, _rev_meta = await self._review(polished, polished.difficulty)
+        q_report = self._last_review_report or {}
+        q_score = q_report.get("quality_score")
+        probe_out = await self._probe_retry_detailed(polished, job_id=None, scenario=1, total=1)
+        if not probe_out.ok:
+            return {"ok": False, "error": f"probe: {probe_out.detail[:400]}", "quality_score": q_score}
+        bank.update_after_probe(
+            question_id,
+            polished,
+            state="published",
+            probe_result={"ok": True},
+            quality_score=q_score,
+            quality_report=q_report or None,
+        )
+        return {
+            "ok": True,
+            "question_id": question_id,
+            "quality_score": q_score,
+            "verdict": verdict,
+            "issues": issues,
+        }
 
     async def repair_question(self, question_id: str) -> dict:
         row = bank.get_question(question_id)
@@ -629,12 +741,22 @@ class GenerationPipeline:
             "destructive": slot_plan.archetype.destructive,
             "avoid_titles_already_in_bank": slot_plan.avoid_titles,
         }
+        if slot_plan.avoid_setups:
+            slot_brief["avoid_anti_patterns"] = slot_plan.avoid_setups
+        if slot_plan.learned_pitfalls:
+            slot_brief["learned_user_pitfalls"] = slot_plan.learned_pitfalls
         if slot_plan.incident:
             slot_brief["boss_fight_causal_incident"] = {
                 "id": slot_plan.incident.id,
                 "theme": slot_plan.incident.title_theme,
                 "blueprint": slot_plan.incident.guidance,
             }
+
+        hard_tier = request.difficulty in ("killer_hardcore", "boss_fight")
+        if hard_tier and "complete" not in getattr(self.client, "__dict__", {}):
+            arch_bp = await self._architect(job_id, topology, slot_brief, request)
+            if arch_bp:
+                slot_brief["architect_blueprint"] = arch_bp
 
         system = (
             BUILDER_SYSTEM
@@ -758,40 +880,56 @@ class GenerationPipeline:
                 continue
             self._update(job_id, "D", "gates passed", scenario=index + 1, total=request.count)
 
+            self._last_review_report = None
             verdict, issues, review_meta = await self._review(envelope, request.difficulty)
+            rev_report = self._last_review_report or {}
+            q_score = rev_report.get("quality_score")
+            blockers = rev_report.get("blockers") or []
+            if q_score is not None:
+                self._slot_quality[index] = (int(q_score), rev_report)
             self._db_generation(
                 "C",
                 review_meta,
                 envelope.model_dump_json()[:1500],
-                json.dumps({"verdict": verdict, "issues": issues}),
+                json.dumps({"verdict": verdict, "quality_score": q_score, "issues": issues}),
                 "ok",
                 job_id=job_id,
             )
+            score_tag = f" · Q:{q_score}" if q_score is not None else ""
             self._update(
                 job_id,
                 "C",
-                f"reviewer {'approved' if verdict == 'approve' else 'requested patch'}"
+                f"reviewer {'approved' if verdict == 'approve' else 'requested patch'}{score_tag}"
                 + (f" ({len(issues)} issue(s))" if issues else ""),
                 scenario=index + 1,
                 total=request.count,
             )
-            if verdict == "patch" and issues and review_cycles < 1:
+            needs_review_fix = bool(
+                (verdict == "patch" and issues)
+                or blockers
+                or (q_score is not None and int(q_score) < 80)
+            )
+            if needs_review_fix and review_cycles < 2:
                 review_cycles += 1
                 failure_kind = "review"
-                last_error = f"review: {'; '.join(issues)[:300]}"
+                reason_bits = blockers or issues or [f"quality_score {q_score} < 80"]
+                last_error = f"review: {'; '.join(str(x) for x in reason_bits)[:300]}"
                 messages.append({"role": "assistant", "content": envelope.model_dump_json()})
                 messages.append({
                     "role": "user",
                     "content": (
                         f"The exam reviewer requested fixes: {last_error}. "
-                        "Address them and return ONLY the corrected JSON envelope."
+                        "Address them (check blind completeness, anti-spoiler rules, hints, and copy_tokens) and return ONLY the corrected JSON envelope."
                     ),
                 })
                 continue
+            if blockers and review_cycles >= 2:
+                return None, f"review blocker: {'; '.join(str(x) for x in blockers)[:300]}", last_candidate
 
-            ok, detail, failure_kind_probe = await self._probe_retry(
+            probe_out = await self._probe_retry_detailed(
                 envelope, job_id=job_id, scenario=index + 1, total=request.count
             )
+            ok, detail, failure_kind_probe = probe_out.ok, probe_out.detail, probe_out.kind
             if not ok and failure_kind_probe == "infra":
                 return None, f"infra: {detail[:400]}", last_candidate
 
@@ -810,15 +948,23 @@ class GenerationPipeline:
                 while repairs_done < 2:
                     use_deep = repairs_done > 0
                     repairs_done += 1
-                    repaired = await self._repair(envelope, detail, deep=use_deep, job_id=job_id)
+                    repaired = await self._repair(
+                        envelope,
+                        detail,
+                        deep=use_deep,
+                        job_id=job_id,
+                        report=probe_out.report,
+                        digest=probe_out.digest,
+                    )
                     if repaired:
                         self._enrich_defaults(repaired, slot_plan)
                         last_candidate = repaired
                         repair_gates = await self._gates(repaired, archetype=slot_plan.archetype)
                         if not repair_gates:
-                            ok2, detail2, _kind2 = await self._probe_retry(
+                            probe_out2 = await self._probe_retry_detailed(
                                 repaired, job_id=job_id, scenario=index + 1, total=request.count
                             )
+                            ok2, detail2 = probe_out2.ok, probe_out2.detail
                             if ok2:
                                 self._update(
                                     job_id,
@@ -828,6 +974,7 @@ class GenerationPipeline:
                                     total=request.count,
                                 )
                                 return repaired, "", repaired
+                            probe_out = probe_out2
                             detail = detail2
                             envelope = repaired
                         else:
@@ -867,6 +1014,39 @@ class GenerationPipeline:
 
         return None, last_error, last_candidate
 
+    async def _architect(
+        self,
+        job_id: str,
+        topology: str,
+        slot_brief: dict[str, Any],
+        request: GenerationRequestModel,
+    ) -> dict | None:
+        """Stage B1: generate a clean blueprint before full YAML envelope synthesis."""
+        self._update(
+            job_id,
+            "B",
+            f"architect designing {request.difficulty} blueprint · {slot_brief.get('assigned_archetype')}",
+            scenario=int(slot_brief.get("slot_index") or 0) + 1 if "slot_index" in slot_brief else None,
+            total=request.count,
+        )
+        user = json.dumps({"topology": topology, "slot_brief": slot_brief}, ensure_ascii=False)
+        try:
+            text, meta = await self.client.complete(
+                [{"role": "system", "content": ARCHITECT_SYSTEM}, {"role": "user", "content": user}],
+                role="main",
+                temperature=0.4,
+                max_tokens=3000,
+                json_mode=True,
+                deep=(request.difficulty == "boss_fight"),
+            )
+            self._db_generation("B1", meta, str(slot_brief.get("assigned_archetype", "")), text, "ok", job_id=job_id)
+            bp = extract_json(text)
+            if isinstance(bp, dict) and ("numbered_tasks" in bp or "symptom_only_summary" in bp):
+                return bp
+        except Exception:
+            pass
+        return None
+
     async def _review(
         self, envelope: ScenarioEnvelope, difficulty: str
     ) -> tuple[str, list[str], dict]:
@@ -883,9 +1063,23 @@ class GenerationPipeline:
             )
             data = extract_json(text)
             verdict = "patch" if data.get("verdict") == "patch" else "approve"
-            issues = [str(item) for item in (data.get("issues") or [])][:6]
+            blockers = [str(item) for item in (data.get("blockers") or [])][:6]
+            raw_issues = [str(item) for item in (data.get("issues") or [])][:6]
+            issues = list(dict.fromkeys([*blockers, *raw_issues]))[:6]
+            q_score_raw = data.get("quality_score")
+            q_score = max(0, min(100, int(q_score_raw))) if q_score_raw is not None else (85 if verdict == "approve" else 65)
+            self._last_review_report = {
+                "verdict": verdict,
+                "quality_score": q_score,
+                "scores": data.get("scores") or {},
+                "blockers": blockers,
+                "suggestions": [str(item) for item in (data.get("suggestions") or [])][:6],
+                "task_map": data.get("task_map") or {},
+                "issues": issues,
+            }
             return verdict, issues, meta
         except Exception as exc:
+            self._last_review_report = None
             return "approve", [], {"provider": "-", "model": f"review-error:{type(exc).__name__}"}
 
     async def _repair(
@@ -895,8 +1089,11 @@ class GenerationPipeline:
         *,
         deep: bool = False,
         job_id: str | None = None,
+        report: dict | None = None,
+        digest: dict | None = None,
+        allow_full_repair: bool = False,
     ) -> ScenarioEnvelope | None:
-        report = self.prober.last_probe_report or {}
+        report = report if report is not None else (self.prober.last_probe_report or {})
         matrix = [
             {
                 "check_id": result.get("check_id"),
@@ -906,7 +1103,9 @@ class GenerationPipeline:
             }
             for result in report.get("results", [])
         ]
-        if self.prober.last_probe_digest is not None:
+        if digest is not None:
+            pass
+        elif self.prober.last_probe_digest is not None:
             digest = self.prober.last_probe_digest
         elif self.engine and hasattr(self.engine, "namespace_digest"):
             try:
@@ -922,6 +1121,7 @@ class GenerationPipeline:
                 "failure": failure_detail[:2500],
                 "checks": matrix,
                 "live_namespace_state": digest,
+                "allow_full_repair": allow_full_repair,
             },
             ensure_ascii=False,
         )
@@ -954,6 +1154,13 @@ class GenerationPipeline:
             checks = data.get("checks")
             if isinstance(checks, list) and checks:
                 merged["checks"] = checks
+            if allow_full_repair:
+                for field_name in (
+                    "prompt", "copy_tokens", "hints", "fast_solution_commands",
+                    "cleanup", "reference_solution",
+                ):
+                    if field_name in data and data[field_name] not in (None, [], ""):
+                        merged[field_name] = data[field_name]
             return ScenarioEnvelope.model_validate(merged)
         except (ValueError, ValidationError):
             return None
@@ -1006,6 +1213,22 @@ class GenerationPipeline:
         total: int | None = None,
     ) -> tuple[bool, str, str]:
         return await self.prober.probe(
+            env,
+            emit=lambda msg: self._update(job_id, "E", msg, scenario=scenario, total=total),
+        )
+
+    async def _probe_retry_detailed(
+        self,
+        env: ScenarioEnvelope,
+        *,
+        job_id: str | None,
+        scenario: int,
+        total: int,
+    ):
+        if "_probe_retry" in self.__dict__:
+            ok, detail, kind = await self._probe_retry(env, job_id=job_id, scenario=scenario, total=total)
+            return ProbeOutcome(ok=ok, detail=detail, kind=kind)
+        return await self.prober.probe_retry_detailed(
             env,
             emit=lambda msg: self._update(job_id, "E", msg, scenario=scenario, total=total),
         )

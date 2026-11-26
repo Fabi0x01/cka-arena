@@ -411,7 +411,7 @@ STORAGE_TS_TOPICS: tuple[StudyTopic, ...] = (
         subtitle="Mount single config files without wiping directories, lock octal permissions cleanly, and project sources.",
         estimated_minutes=5,
         exam_frequency="High",
-        archetype_ids=("st-configmap-subpath-volume", "st-secret-volume-permissions"),
+        archetype_ids=("st-configmap-subpath-volume", "st-secret-volume-permissions", "st-emptydir-shared-volume"),
         summary=(
             "Mounting a ConfigMap or Secret directly onto an existing directory like `/etc/nginx/conf.d` hides every baked-in image file "
             "unless you use `subPath` targeting a specific filename. Secret volumes accept YAML octal `defaultMode` (`0400` unquoted = decimal `256`) "
@@ -802,7 +802,7 @@ STORAGE_TS_TOPICS: tuple[StudyTopic, ...] = (
         subtitle="Debug `0/1 Running` Pods, `CreateContainerConfigError`, and `Init:CrashLoopBackOff` blockages.",
         estimated_minutes=5,
         exam_frequency="Critical",
-        archetype_ids=("ts-readiness-probe", "ts-configmap-env-broken", "ts-initcontainer-blocking"),
+        archetype_ids=("ts-readiness-probe", "ts-configmap-env-broken", "ts-initcontainer-blocking", "ts-pvc-pending-storageclass"),
         summary=(
             "Pod startup traverses sequential gates: `initContainers` (must exit `0` cleanly) -> kubelet volume/env resolution "
             "(`CreateContainerConfigError` if ConfigMap/Secret missing) -> `startupProbe` -> continuous `readinessProbe` (gates Service traffic) + `livenessProbe` (triggers container restart)."

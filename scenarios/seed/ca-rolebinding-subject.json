@@ -48,7 +48,8 @@
         "target_namespace": "cka-rbac2",
         "expected_allowed": true
       },
-      "failure_hint": "Patch the RoleBinding subject to deployer2."
+      "failure_hint": "Patch the RoleBinding subject to deployer2.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-can-list",
@@ -62,7 +63,8 @@
         "target_namespace": "cka-rbac2",
         "expected_allowed": true
       },
-      "failure_hint": "The Role grants list \u2014 fix the binding subject."
+      "failure_hint": "The Role grants list \u2014 fix the binding subject.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-wrong-sa-denied",
@@ -76,7 +78,8 @@
         "target_namespace": "cka-rbac2",
         "expected_allowed": false
       },
-      "failure_hint": "The binding currently points at wrong-sa \u2014 repoint it at deployer2."
+      "failure_hint": "The binding currently points at wrong-sa \u2014 repoint it at deployer2.",
+      "weight_ratio": 1.0
     }
   ],
   "solution": {

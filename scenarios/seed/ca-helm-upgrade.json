@@ -43,7 +43,8 @@
         "expected_status": "deployed",
         "min_revision": 2
       },
-      "failure_hint": "Run helm upgrade so the revision increments."
+      "failure_hint": "Run helm upgrade so the revision increments.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-pods-ready",
@@ -54,7 +55,8 @@
         "label_selector": "app=cka-web",
         "min_ready": 2
       },
-      "failure_hint": "Set replicaCount=2 in the upgrade."
+      "failure_hint": "Set replicaCount=2 in the upgrade.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-image",
@@ -68,7 +70,8 @@
         "operator": "equals",
         "expected": "nginx:1.27-alpine"
       },
-      "failure_hint": "Pass --set image.tag=1.27-alpine to helm upgrade."
+      "failure_hint": "Pass --set image.tag=1.27-alpine to helm upgrade.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-replicas",
@@ -82,7 +85,8 @@
         "operator": "gte",
         "expected": 2
       },
-      "failure_hint": "Pass --set replicaCount=2 to helm upgrade."
+      "failure_hint": "Pass --set replicaCount=2 to helm upgrade.",
+      "weight_ratio": 1.0
     }
   ],
   "solution": {

@@ -1,0 +1,95 @@
+{
+  "schema_version": "1.2",
+  "id": "seed-ca-apiserver-static-pod-fix",
+  "title": "Repair Broken Control-Plane Static Pod",
+  "domain": "Cluster Architecture, Installation & Configuration",
+  "subtopics": ["static-pods", "kube-scheduler", "controlplane", "troubleshooting"],
+  "difficulty": "killer_hardcore",
+  "weight": 9,
+  "estimated_minutes": 7,
+  "prompt": "Newly created Deployment `sched-probe` (backed by Service `sched-svc`) in namespace `cka-static-cp` fails to schedule and stays `Pending` even though worker nodes report `Ready`.\n\nPerform the following tasks:\n1. Diagnose the control-plane scheduling subsystem on `controlplane`.\n2. Repair `/etc/kubernetes/manifests/kube-scheduler.yaml` on `controlplane` so `kube-scheduler-controlplane` in `kube-system` becomes `Ready`.\n3. Verify Deployment `sched-probe` schedules (`1` ready replica) and Service `sched-svc` exposes ready endpoints in namespace `cka-static-cp`.",
+  "copy_tokens": ["sched-probe", "sched-svc", "cka-static-cp", "controlplane", "kube-scheduler-controlplane", "kube-system"],
+  "docs_links": [
+    {"label": "Create Static Pods", "url": "https://kubernetes.io/docs/tasks/configure-pod-container/static-pod/"}
+  ],
+  "hints": [
+    "Check control-plane pods with `k -n kube-system get pods` and container logs/crictl on `controlplane`.",
+    "Inspect static pod manifests under `/etc/kubernetes/manifests/` on `controlplane`, specifically `kube-scheduler.yaml`."
+  ],
+  "fast_solution_commands": [
+    "k -n kube-system get pods",
+    "ssh controlplane 'sudo crictl ps -a | grep scheduler && sudo vi /etc/kubernetes/manifests/kube-scheduler.yaml'"
+  ],
+  "setup": {
+    "namespaces": ["cka-static-cp"],
+    "manifests": [
+      "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: sched-probe\n  namespace: cka-static-cp\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: sched-probe\n  template:\n    metadata:\n      labels:\n        app: sched-probe\n    spec:\n      containers:\n      - name: web\n        image: nginx:1.27-alpine\n        ports:\n        - containerPort: 80\n---\napiVersion: v1\nkind: Service\nmetadata:\n  name: sched-svc\n  namespace: cka-static-cp\nspec:\n  selector:\n    app: sched-probe\n  ports:\n  - port: 80\n    targetPort: 80\n"
+    ],
+    "node_commands": [
+      {
+        "node": "controlplane",
+        "sudo": true,
+        "backup_paths": ["/etc/kubernetes/manifests/kube-scheduler.yaml"],
+        "command": "sed -i 's|--leader-elect=true|--leader-electtt=true|' /etc/kubernetes/manifests/kube-scheduler.yaml"
+      }
+    ]
+  },
+  "checks": [
+    {
+      "id": "chk-sched-flag",
+      "description": "`/etc/kubernetes/manifests/kube-scheduler.yaml` defines `--leader-elect=true`",
+      "type": "host_file_contains",
+      "params": {"location": "controlplane", "path": "/etc/kubernetes/manifests/kube-scheduler.yaml", "regex_patterns": ["--leader-elect=true"]},
+      "weight_ratio": 1.0
+    },
+    {
+      "id": "chk-sched-pod-ready",
+      "description": "Control-plane pod `kube-scheduler-controlplane` is Running and Ready",
+      "type": "pod_status_ready",
+      "params": {"namespace": "kube-system", "label_selector": "component=kube-scheduler", "min_ready": 1},
+      "weight_ratio": 1.0
+    },
+    {
+      "id": "chk-workload-scheduled",
+      "description": "Deployment `sched-probe` schedules and becomes Ready",
+      "type": "deployment_rollout_ready",
+      "params": {"namespace": "cka-static-cp", "name": "sched-probe", "min_ready_replicas": 1},
+      "weight_ratio": 1.0
+    },
+    {
+      "id": "chk-svc-ep",
+      "description": "Service `sched-svc` exposes at least 1 ready endpoint",
+      "type": "service_endpoints_ready",
+      "params": {"namespace": "cka-static-cp", "service_name": "sched-svc", "min_ready_addresses": 1},
+      "weight_ratio": 1.0
+    }
+  ],
+  "solution": {
+    "manifests": [],
+    "commands": [],
+    "node_commands": [
+      {
+        "node": "controlplane",
+        "sudo": true,
+        "backup_paths": ["/etc/kubernetes/manifests/kube-scheduler.yaml"],
+        "command": "sed -i 's|--leader-electtt=true|--leader-elect=true|g' /etc/kubernetes/manifests/kube-scheduler.yaml && for i in $(seq 1 20); do crictl ps --name kube-scheduler -q | grep -q . && break; sleep 2; done"
+      }
+    ]
+  },
+  "cleanup": {
+    "namespaces": ["cka-static-cp"],
+    "node_commands": [
+      {
+        "node": "controlplane",
+        "sudo": true,
+        "backup_paths": [],
+        "command": "sed -i 's|--leader-electtt=true|--leader-elect=true|g' /etc/kubernetes/manifests/kube-scheduler.yaml"
+      }
+    ]
+  },
+  "reference_solution": "SSH to `controlplane` and fix the misspelled flag `--leader-electtt=true` -> `--leader-elect=true` in `/etc/kubernetes/manifests/kube-scheduler.yaml`.",
+  "destructive": true,
+  "archetype_id": "ca-controlplane-static-pod-fix",
+  "context_command": "kubectl config use-context cka",
+  "ssh_target": "controlplane"
+}

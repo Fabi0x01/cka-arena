@@ -48,7 +48,8 @@
         "name": "web-route",
         "namespace": "cka-gw"
       },
-      "failure_hint": "Create the HTTPRoute attached to Gateway edge."
+      "failure_hint": "Create the HTTPRoute attached to Gateway edge.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-hostname",
@@ -62,7 +63,8 @@
         "operator": "equals",
         "expected": "web.example.com"
       },
-      "failure_hint": "Set hostnames to [web.example.com]."
+      "failure_hint": "Set hostnames to [web.example.com].",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-backend",
@@ -76,7 +78,8 @@
         "operator": "equals",
         "expected": "web-svc"
       },
-      "failure_hint": "Point the rule backendRef at web-svc port 80."
+      "failure_hint": "Point the rule backendRef at web-svc port 80.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-accepted",
@@ -90,7 +93,8 @@
         "operator": "equals",
         "expected": "True"
       },
-      "failure_hint": "The route must attach to Gateway edge and be accepted (status Accepted=True)."
+      "failure_hint": "The route must attach to Gateway edge and be accepted (status Accepted=True).",
+      "weight_ratio": 1.0
     }
   ],
   "solution": {

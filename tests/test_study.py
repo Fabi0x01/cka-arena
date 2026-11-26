@@ -24,7 +24,7 @@ def test_study_curriculum_invariants() -> None:
 
     covered_archetypes = {aid for t in topics for aid in t.archetype_ids}
     all_archetypes = set(curriculum.ARCHETYPES_BY_ID.keys())
-    assert len(all_archetypes) == 59
+    assert len(all_archetypes) == 67
     assert all_archetypes - covered_archetypes == set()
     assert covered_archetypes - all_archetypes == set()
 

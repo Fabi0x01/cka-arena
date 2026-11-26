@@ -11,7 +11,7 @@
   "difficulty": "exam_standard",
   "weight": 4,
   "estimated_minutes": 4,
-  "prompt": "The Pod of Deployment `web` in namespace `cka-wl-resources` stays `Pending` with `Insufficient cpu`: it requests `4` CPUs, more than any node can allocate.\n\nPerform the following tasks:\n1. Reduce the CPU request of Deployment `web` to `100m` so the Pod can be scheduled.\n2. Keep the image `nginx:1.27-alpine`.",
+  "prompt": "The Pod of Deployment `web` in namespace `cka-wl-resources` fails to schedule and remains `Pending` (`Insufficient cpu`).\n\nPerform the following tasks:\n1. Adjust the CPU request of Deployment `web` to `100m` so the Pod schedules cleanly.\n2. Keep the container image `nginx:1.27-alpine`.",
   "copy_tokens": [
     "web",
     "cka-wl-resources",
@@ -43,7 +43,8 @@
         "label_selector": "app=web",
         "min_ready": 1
       },
-      "failure_hint": "Lower the CPU request so the scheduler can place the Pod."
+      "failure_hint": "Lower the CPU request so the scheduler can place the Pod.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-cpu-request",
@@ -57,7 +58,8 @@
         "operator": "equals",
         "expected": "100m"
       },
-      "failure_hint": "Patch the container requests.cpu to 100m."
+      "failure_hint": "Patch the container requests.cpu to 100m.",
+      "weight_ratio": 1.0
     }
   ],
   "solution": {

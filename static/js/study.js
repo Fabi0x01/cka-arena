@@ -137,6 +137,17 @@ export function initStudy({
     }
   }
 
+  function isTemplateOrNodeCommand(cmdText) {
+    if (/<[A-Za-z0-9_.:-]+>|\bYOUR_[A-Z0-9_]+\b|\.\.\./.test(cmdText)) return true;
+    if (/^\s*(?:sudo\s+)?(?:crictl|journalctl|systemctl|kubeadm|etcdutl|etcdctl)\b/.test(cmdText)) return true;
+    if (/^\s*(?:sudo\s+)?(?:vi|vim|nano)\s+\/etc\//.test(cmdText)) return true;
+    return false;
+  }
+
+  function isDestructiveCommand(cmdText) {
+    return /\b(delete|drain|cordon|uncordon|replace\s+--force|rm\s+-)\b/i.test(cmdText);
+  }
+
   function makeCmdBox(cmdText, { allowRun = false } = {}) {
     const box = document.createElement("div");
     box.className = "study-cmd-box";
@@ -152,13 +163,19 @@ export function initStudy({
     copyBtn.onclick = () => copyText(cmdText, copyBtn);
     acts.appendChild(copyBtn);
 
-    if (allowRun && runInTerminal) {
+    if (allowRun && runInTerminal && !isTemplateOrNodeCommand(cmdText)) {
       const runBtn = document.createElement("button");
       runBtn.type = "button";
       runBtn.className = "btn sm";
       runBtn.title = "Send command to Arena terminal";
       runBtn.append(iconEl("play", 12), document.createTextNode("Run"));
-      runBtn.onclick = () => runInTerminal(cmdText);
+      runBtn.onclick = async () => {
+        if (isDestructiveCommand(cmdText)) {
+          const ok = await confirmDialog("Execute destructive command in terminal?", cmdText);
+          if (!ok) return;
+        }
+        runInTerminal(cmdText);
+      };
       acts.appendChild(runBtn);
     }
     box.append(code, acts);
@@ -396,7 +413,8 @@ export function initStudy({
         appendRichText(title, topic.title);
         const meta = document.createElement("div");
         meta.className = "study-topic-meta";
-        meta.textContent = `~${topic.estimated_minutes}m · ${topic.exam_frequency} · bank ${topic.bank_count}`;
+        meta.textContent = `~${topic.estimated_minutes}m · ${topic.exam_frequency} · bank ${topic.bank_count}`
+          + (topic.lab_verified ? " · lab verified" : "");
         info.append(title, meta);
 
         const dots = document.createElement("div");
@@ -533,7 +551,8 @@ export function initStudy({
     const t = activeTopic;
     const p = t.progress;
 
-    el("study-topic-meta").textContent = `${DOMAIN_SHORT[t.domain] || t.domain} · TOPIC #${t.order} · ${t.exam_frequency.toUpperCase()} · ~${t.estimated_minutes} MIN`;
+    el("study-topic-meta").textContent = `${DOMAIN_SHORT[t.domain] || t.domain} · TOPIC #${t.order} · ${t.exam_frequency.toUpperCase()} · ~${t.estimated_minutes} MIN`
+      + (t.lab_verified ? " · LAB VERIFIED" : "");
     const xpBadge = el("study-topic-xp");
     xpBadge.textContent = p.completed ? `${p.xp_earned} / ${p.max_xp} XP · CLEARED` : `${p.xp_earned} / ${p.max_xp} XP`;
     xpBadge.className = p.completed ? "badge pass" : "badge accent";

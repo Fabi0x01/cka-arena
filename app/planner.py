@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from app.curriculum import (
     ARCHETYPES_BY_ID,
@@ -27,6 +27,8 @@ class SlotPlan:
     secondary_namespace: str | None
     avoid_titles: list[str]
     example_json: str
+    avoid_setups: list[str] = field(default_factory=list)
+    learned_pitfalls: list[str] = field(default_factory=list)
 
 
 def _focus_score(arch: Archetype, constraints: list[str]) -> int:
@@ -34,6 +36,15 @@ def _focus_score(arch: Archetype, constraints: list[str]) -> int:
         return 0
     blob = " ".join(constraints).lower()
     haystack = " ".join([arch.id, *arch.subtopics, arch.guidance]).lower()
+    words = [w for w in blob.replace(",", " ").split() if len(w) >= 3 and w not in ("no", "not", "exclude", "only", "with", "and")]
+    return sum(1 for w in words if w in haystack)
+
+
+def _incident_focus_score(inc: CausalIncidentBlueprint, constraints: list[str]) -> int:
+    if not constraints:
+        return 0
+    blob = " ".join(constraints).lower()
+    haystack = " ".join([inc.id, inc.title_theme, *inc.subtopics, inc.guidance]).lower()
     words = [w for w in blob.replace(",", " ").split() if len(w) >= 3 and w not in ("no", "not", "exclude", "only", "with", "and")]
     return sum(1 for w in words if w in haystack)
 
@@ -49,6 +60,8 @@ def plan_slots(
     recent_rows: list[dict],
     seed: str | None = None,
     target_archetype_id: str | None = None,
+    target_archetypes: list[str] | None = None,
+    feedback_pitfalls: dict[str, list[str]] | None = None,
 ) -> list[SlotPlan]:
     """Assign distinct domains (deficit-first), archetypes, neutral namespaces, and few-shots."""
     rng = random.Random(seed)
@@ -78,9 +91,13 @@ def plan_slots(
     used_incidents: set[str] = set()
     plans: list[SlotPlan] = []
     pinned_arch = ARCHETYPES_BY_ID.get(target_archetype_id) if target_archetype_id else None
+    targeted_list = [ARCHETYPES_BY_ID[a] for a in (target_archetypes or []) if a in ARCHETYPES_BY_ID]
 
     for idx in range(count):
-        if pinned_arch and idx == 0:
+        if idx < len(targeted_list):
+            archetype = targeted_list[idx]
+            domain = archetype.domain
+        elif pinned_arch and idx == 0:
             archetype = pinned_arch
             domain = archetype.domain
         else:
@@ -89,18 +106,18 @@ def plan_slots(
             if not candidates:
                 candidates = eligible_archetypes(domains[0], difficulty, available_addons, constraints)
 
-            # Prefer unused in this batch, matching focus hint, and least used recently in DB
+            # Prefer unused in this batch, zero-coverage first, matching focus hint, least used recently
             ranked = sorted(
                 candidates,
                 key=lambda a: (
                     1 if a.id in used_archetypes else 0,
+                    0 if recent_archetypes.get(a.id, 0) == 0 else 1,
                     -_focus_score(a, constraints),
                     recent_archetypes.get(a.id, 0),
                     rng.random(),
                 ),
             )
             archetype = ranked[0]
-        used_archetypes.add(archetype.id)
 
         incident: CausalIncidentBlueprint | None = None
         if difficulty == "boss_fight":
@@ -108,19 +125,33 @@ def plan_slots(
             if inc_candidates:
                 inc_ranked = sorted(
                     inc_candidates,
-                    key=lambda inc: (1 if inc.id in used_incidents else 0, rng.random()),
+                    key=lambda inc: (
+                        1 if inc.id in used_incidents else 0,
+                        -_incident_focus_score(inc, constraints),
+                        0 if inc.primary_archetype_id == archetype.id else 1,
+                        rng.random(),
+                    ),
                 )
                 incident = inc_ranked[0]
                 used_incidents.add(incident.id)
+                if (
+                    not (pinned_arch and idx == 0)
+                    and idx >= len(targeted_list)
+                    and incident.primary_archetype_id in ARCHETYPES_BY_ID
+                ):
+                    archetype = ARCHETYPES_BY_ID[incident.primary_archetype_id]
+
+        used_archetypes.add(archetype.id)
 
         ns = ns_pool[idx % len(ns_pool)]
         if idx >= len(ns_pool):
             ns = f"{ns}-{idx + 1}"
         secondary_ns = None
-        if "multi-ns" in archetype.id or difficulty == "killer_hardcore" and "multi" in archetype.guidance.lower():
+        if "multi-ns" in archetype.id or (difficulty == "killer_hardcore" and "multi" in archetype.guidance.lower()):
             secondary_ns = f"{ns}-edge"
 
         seed_file = incident.example_seed if incident else archetype.example_seed
+        pitfalls = list((feedback_pitfalls or {}).get(archetype.id, []))[:5]
         plans.append(
             SlotPlan(
                 slot_index=idx,
@@ -132,6 +163,8 @@ def plan_slots(
                 secondary_namespace=secondary_ns,
                 avoid_titles=recent_titles[:15],
                 example_json=load_seed_example(seed_file),
+                avoid_setups=list(archetype.anti_patterns)[:5],
+                learned_pitfalls=pitfalls,
             )
         )
 

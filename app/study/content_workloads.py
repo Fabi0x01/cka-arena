@@ -148,7 +148,7 @@ WORKLOAD_TOPICS: tuple[StudyTopic, ...] = (
         subtitle="Master push-away taints (`NoSchedule`/`NoExecute`), tolerations, and hard/soft node attraction.",
         estimated_minutes=6,
         exam_frequency="Critical",
-        archetype_ids=("wl-taint-toleration", "wl-node-affinity"),
+        archetype_ids=("wl-taint-toleration", "wl-node-affinity", "wl-pod-node-selector-hostname"),
         summary=(
             "Taints (`kube-scheduler` repels Pods) and `nodeSelector`/`nodeAffinity` (attracts Pods to labeled nodes) solve two opposite "
             "halves of scheduling. Remembering that Tolerations ONLY permit scheduling onto tainted nodes — rather than pinning Pods away from untainted nodes — "
@@ -721,7 +721,7 @@ WORKLOAD_TOPICS: tuple[StudyTopic, ...] = (
         subtitle="Schedule per-node agents onto controlplane too, and master batch completions, parallelism & cron policies.",
         estimated_minutes=5,
         exam_frequency="High",
-        archetype_ids=("wl-daemonset-controlplane", "wl-cronjob-policy"),
+        archetype_ids=("wl-daemonset-controlplane", "wl-cronjob-policy", "wl-job-backoff-completions"),
         summary=(
             "DaemonSets run one Pod per eligible node (requiring a `control-plane:NoSchedule` toleration to cover controlplane hosts). "
             "Jobs execute batch tasks until `completions` succeed (`parallelism`, `backoffLimit`, `activeDeadlineSeconds`, `ttlSecondsAfterFinished`), "

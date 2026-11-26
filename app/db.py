@@ -27,8 +27,10 @@ CREATE TABLE IF NOT EXISTS sessions (
     finished_at REAL,
     total_weight INTEGER NOT NULL DEFAULT 0,
     earned_weight INTEGER NOT NULL DEFAULT 0,
+    earned_weight_exact REAL,
     time_limit_minutes INTEGER,
-    variant TEXT NOT NULL DEFAULT 'study'
+    variant TEXT NOT NULL DEFAULT 'study',
+    strict_psi INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS bank_questions (
@@ -53,7 +55,9 @@ CREATE TABLE IF NOT EXISTS bank_questions (
     retired_reason TEXT,
     created_at REAL NOT NULL,
     archetype_id TEXT,
-    fingerprint TEXT
+    fingerprint TEXT,
+    quality_score REAL,
+    quality_report_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS session_items (
@@ -74,7 +78,10 @@ CREATE TABLE IF NOT EXISTS session_items (
     notes_text TEXT,
     checked_tasks_json TEXT,
     hints_used INTEGER NOT NULL DEFAULT 0,
-    context_name TEXT
+    context_name TEXT,
+    active_seconds REAL NOT NULL DEFAULT 0,
+    last_entered_at REAL,
+    context_switched INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS generation_requests (
@@ -167,18 +174,38 @@ CREATE TABLE IF NOT EXISTS study_activity (
     updated_at REAL
 );
 
+CREATE TABLE IF NOT EXISTS user_settings (
+    key TEXT PRIMARY KEY,
+    value_json TEXT NOT NULL,
+    updated_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS question_feedback (
+    id TEXT PRIMARY KEY,
+    bank_question_id TEXT NOT NULL,
+    archetype_id TEXT,
+    reason_code TEXT NOT NULL,
+    note TEXT,
+    created_at REAL NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_session_items_session ON session_items(session_id, order_index);
 CREATE INDEX IF NOT EXISTS idx_bank_cell ON bank_questions(domain, difficulty, state);
 CREATE INDEX IF NOT EXISTS idx_check_runs_item ON check_runs(session_item_id, ran_at);
 CREATE INDEX IF NOT EXISTS idx_command_audit_item ON command_audit(session_item_id, ran_at);
+CREATE INDEX IF NOT EXISTS idx_question_feedback_arch ON question_feedback(archetype_id, created_at);
 """
 
 _MIGRATIONS: tuple[str, ...] = (
     "ALTER TABLE bank_questions ADD COLUMN title TEXT",
     "ALTER TABLE bank_questions ADD COLUMN archetype_id TEXT",
     "ALTER TABLE bank_questions ADD COLUMN fingerprint TEXT",
+    "ALTER TABLE bank_questions ADD COLUMN quality_score REAL",
+    "ALTER TABLE bank_questions ADD COLUMN quality_report_json TEXT",
     "ALTER TABLE sessions ADD COLUMN time_limit_minutes INTEGER",
     "ALTER TABLE sessions ADD COLUMN variant TEXT NOT NULL DEFAULT 'study'",
+    "ALTER TABLE sessions ADD COLUMN earned_weight_exact REAL",
+    "ALTER TABLE sessions ADD COLUMN strict_psi INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE session_items ADD COLUMN flagged INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE session_items ADD COLUMN last_check_json TEXT",
     "ALTER TABLE session_items ADD COLUMN mounted_at REAL",
@@ -188,6 +215,9 @@ _MIGRATIONS: tuple[str, ...] = (
     "ALTER TABLE session_items ADD COLUMN checked_tasks_json TEXT",
     "ALTER TABLE session_items ADD COLUMN hints_used INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE session_items ADD COLUMN context_name TEXT",
+    "ALTER TABLE session_items ADD COLUMN active_seconds REAL NOT NULL DEFAULT 0",
+    "ALTER TABLE session_items ADD COLUMN last_entered_at REAL",
+    "ALTER TABLE session_items ADD COLUMN context_switched INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE llm_generations ADD COLUMN job_id TEXT",
     "ALTER TABLE llm_generations ADD COLUMN duration_ms INTEGER",
     "ALTER TABLE llm_generations ADD COLUMN prompt_tokens INTEGER",
@@ -196,6 +226,7 @@ _MIGRATIONS: tuple[str, ...] = (
     "ALTER TABLE study_progress ADD COLUMN quiz_passed_mask INTEGER NOT NULL DEFAULT 0",
     "CREATE INDEX IF NOT EXISTS idx_bank_fingerprint ON bank_questions(fingerprint, state)",
     "CREATE INDEX IF NOT EXISTS idx_command_audit_item ON command_audit(session_item_id, ran_at)",
+    "CREATE INDEX IF NOT EXISTS idx_question_feedback_arch ON question_feedback(archetype_id, created_at)",
 )
 
 _WAL_INITIALIZED: set[Path] = set()

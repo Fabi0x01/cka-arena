@@ -9,12 +9,12 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
-  <link rel="stylesheet" href="/static/css/tokens.css?v=3.4">
-  <link rel="stylesheet" href="/static/css/base.css?v=3.4">
-  <link rel="stylesheet" href="/static/css/layout.css?v=3.4">
-  <link rel="stylesheet" href="/static/css/components.css?v=3.4">
+  <link rel="stylesheet" href="/static/css/tokens.css?v=4.0">
+  <link rel="stylesheet" href="/static/css/base.css?v=4.0">
+  <link rel="stylesheet" href="/static/css/layout.css?v=4.0">
+  <link rel="stylesheet" href="/static/css/components.css?v=4.0">
   <link rel="stylesheet" href="/static/vendor/xterm/xterm.css">
-  <link rel="stylesheet" href="/static/css/views.css?v=3.6">
+  <link rel="stylesheet" href="/static/css/views.css?v=4.0">
 </head>
 <body>
 <div class="app-shell">
@@ -123,6 +123,7 @@
                 <span class="mission-btn-desc">Short high-frequency tasks calibrated for imperative kubectl speed.</span>
               </button>
             </div>
+            <div id="empty-daily-mission" class="progress-list" style="margin-block-end:12px" hidden></div>
             <div class="pill-row">
               <button type="button" class="btn primary" id="empty-practice">Configure Practice</button>
               <button type="button" class="btn" id="empty-generate">Open Studio</button>
@@ -146,6 +147,9 @@
             </div>
             <div class="q-progress-track">
               <div class="q-progress-fill" id="q-progress-fill"></div>
+            </div>
+            <div class="triage-banner" id="q-triage-alert" hidden>
+              <span>Time-box exceeded — consider Flag &amp; Next → to protect your 66% exam pacing.</span>
             </div>
 
             <div class="context-strip">
@@ -179,7 +183,7 @@
 
             <div id="q-pane-hints" hidden>
               <div id="hint-drawer" hidden></div>
-              <div class="section-title">Scenario Documentation</div>
+              <div class="section-title" id="q-docs-section">Scenario Documentation</div>
               <div class="docs-links" id="q-docs"></div>
               <div class="allowed-docs">
                 <span>Exam-allowed domains:</span>
@@ -206,6 +210,7 @@
           <div class="grow"></div>
           <button type="button" class="check-btn" id="btn-check">Check <kbd>⌘↵</kbd></button>
           <button type="button" class="btn sm primary" id="btn-submit-exam" hidden>Submit Exam</button>
+          <button type="button" class="btn sm ghost" id="btn-prev" hidden>← Prev</button>
           <button type="button" class="btn sm" id="btn-next" disabled>Next →</button>
           <button type="button" class="btn sm primary" id="btn-show-terminal" hidden title="Show built-in terminal (⌘\)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
@@ -257,6 +262,16 @@
           <div class="readiness-hero" id="readiness-summary">
             <div class="row">Loading readiness metrics…</div>
           </div>
+          <div id="daily-mission-card" class="progress-list" style="margin-block-start:12px">
+            <div class="row">Loading today’s study mission…</div>
+          </div>
+          <div class="field-row" style="margin-block-start:10px;align-items:flex-end">
+            <label class="field">
+              <span>Target CKA exam date</span>
+              <input class="input" id="exam-target-date" type="date">
+            </label>
+            <button type="button" class="btn sm" id="btn-save-exam-date">Save exam date</button>
+          </div>
           <div class="crit-grid" id="readiness-criteria"></div>
           <div class="section-title" style="margin-block-start:20px">Targeted Drills</div>
           <div class="pill-row">
@@ -267,6 +282,7 @@
             <button type="button" class="btn sm ghost" id="btn-readiness-refresh">Refresh</button>
           </div>
           <div class="section-title" style="margin-block-start:20px">Recent Mock Exams</div>
+          <div class="trend-chart" id="mock-trend-chart" hidden></div>
           <div class="progress-list" id="recent-mocks-body"><div class="row">Loading…</div></div>
         </div>
       </section>
@@ -274,7 +290,7 @@
         <div class="bay-scroll">
           <header class="view-head">
             <h1>CNCF CKA Skill Tree</h1>
-            <p>Filter all 59 curriculum archetypes by domain or SM-2 status, launch targeted Practice, or trigger AI Generation directly.</p>
+            <p>Filter all 67 curriculum archetypes by domain or SM-2 status, launch targeted Practice, or trigger AI Generation directly.</p>
           </header>
           <div class="skill-toolbar">
             <div class="skill-toolbar-row" id="skill-domain-filters"></div>
@@ -376,6 +392,7 @@
           <div class="pill-row">
             <button type="button" class="btn primary" id="btn-generate">Generate with AI</button>
             <button type="button" class="btn" id="btn-fill-gaps">Fill Weak Cells (5×3)</button>
+            <button type="button" class="btn" id="btn-fill-archetypes">Fill Missing Archetypes</button>
             <button type="button" class="btn ghost" id="btn-audit-bank">Audit Legacy Bank</button>
           </div>
         </div>
@@ -466,6 +483,9 @@
             <div>
               <div class="section-title">Addon bootstrap hints</div>
               <div id="bootstrap-body" class="progress-list"><div class="row">—</div></div>
+              <div class="pill-row" style="margin-block-start:10px">
+                <button type="button" class="btn sm primary" id="btn-install-addons">Install missing addons</button>
+              </div>
             </div>
           </div>
         </div>
@@ -544,6 +564,11 @@
               <p style="font-size:var(--text-xs);color:var(--ink-muted);margin-block-end:12px">Removes all scenario resources, restores node baseline files and restarts containerd/kubelet while keeping installed addons (~1–2 minutes).</p>
               <button type="button" class="btn sm danger" id="btn-baseline">Run clean reset</button>
             </div>
+            <div>
+              <div class="section-title">Portable database backup</div>
+              <div id="backup-status" class="progress-list" style="margin-block-end:10px"><div class="row">Loading backup status…</div></div>
+              <button type="button" class="btn sm" id="btn-backup-create">Create backup snapshot</button>
+            </div>
           </div>
         </div>
       </section>
@@ -601,6 +626,12 @@
         <option value="boss_fight">Boss Fight</option>
       </select>
     </div>
+    <div class="field">
+      <div class="choice-row">
+        <label class="choice"><input type="checkbox" id="practice-strict-psi"> Strict PSI Shell (no k / $do / $now aliases)</label>
+        <label class="choice"><input type="checkbox" id="practice-allow-destructive"> Include Destructive Labs (etcd restore / static pod / drain)</label>
+      </div>
+    </div>
     <div class="section-title">Distribution preview</div>
     <div class="progress-list" id="practice-preview"><div class="row">Click Preview to inspect the drawn allocation.</div></div>
   </div>
@@ -630,7 +661,22 @@
   <div class="dialog-actions">
     <button type="button" class="btn ghost" id="end-cancel">Cancel</button>
     <button type="button" class="btn primary" id="end-finish">Finish &amp; clean up</button>
+    <button type="button" class="btn primary" id="end-review" hidden>Open Detailed Review</button>
     <button type="button" class="btn" id="end-close" hidden>Close</button>
+  </div>
+</dialog>
+
+<!-- Post-Mock Detailed Exam Review Modal -->
+<dialog id="review-modal" class="dialog-wide" closedby="any">
+  <div class="dialog-head">
+    <h2>Detailed Exam Review</h2>
+    <p class="sub" id="review-sub">Per-task check results, context verification, Speed Coach, and reference solutions.</p>
+  </div>
+  <div class="dialog-body" id="review-body">
+    <div class="row">Loading…</div>
+  </div>
+  <div class="dialog-actions">
+    <button type="button" class="btn primary" id="review-close">Close</button>
   </div>
 </dialog>
 
@@ -684,6 +730,35 @@
   </div>
 </dialog>
 
+<!-- Report / Retire Structured Feedback Modal -->
+<dialog id="report-modal" class="dialog-narrow" closedby="any">
+  <div class="dialog-head">
+    <h2>Report &amp; Retire Question</h2>
+    <p class="sub">Your feedback retires this question from draws and trains future AI scenario planning.</p>
+  </div>
+  <div class="dialog-body">
+    <div class="field">
+      <span>Issue category</span>
+      <select class="input" id="report-reason-code">
+        <option value="broken_check">Broken / unfair verification check</option>
+        <option value="ambiguous_prompt">Ambiguous prompt or missing required detail</option>
+        <option value="spoiler">Symptom leaked root cause / spoiler</option>
+        <option value="too_easy">Too easy for assigned difficulty</option>
+        <option value="cluster_bug">Cluster setup/cleanup issue</option>
+        <option value="other">Other issue</option>
+      </select>
+    </div>
+    <div class="field">
+      <span>Details (optional)</span>
+      <textarea class="input" id="report-reason-note" rows="3" placeholder="What went wrong or felt unfair?"></textarea>
+    </div>
+  </div>
+  <div class="dialog-actions">
+    <button type="button" class="btn ghost" id="report-cancel">Cancel</button>
+    <button type="button" class="btn danger" id="report-submit">Retire Question</button>
+  </div>
+</dialog>
+
 <!-- Confirmation Modal -->
 <dialog id="confirm-modal" class="dialog-narrow" closedby="any">
   <div class="dialog-head">
@@ -700,6 +775,6 @@
 
 <script src="/static/vendor/xterm/xterm.js"></script>
 <script src="/static/vendor/xterm/addon-fit.js"></script>
-<script type="module" src="/static/js/app.js?v=3.7"></script>
+<script type="module" src="/static/js/app.js?v=4.0"></script>
 </body>
 </html>

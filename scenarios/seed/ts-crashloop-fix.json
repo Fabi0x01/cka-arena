@@ -46,7 +46,8 @@
         "label_selector": "app=web",
         "min_ready": 1
       },
-      "failure_hint": "The container exits immediately. Inspect `kubectl -n cka-ts-crashloop logs <pod>` and fix the container command."
+      "failure_hint": "The container exits immediately. Inspect `kubectl -n cka-ts-crashloop logs <pod>` and fix the container command.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-image-kept",
@@ -60,7 +61,8 @@
         "operator": "equals",
         "expected": "nginx:1.27-alpine"
       },
-      "failure_hint": "Do not change the image; fix only the container command."
+      "failure_hint": "Do not change the image; fix only the container command.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-available",
@@ -74,7 +76,8 @@
         "operator": "gte",
         "expected": 1
       },
-      "failure_hint": "No replica is available yet \u2014 the Pod must become Ready first."
+      "failure_hint": "No replica is available yet \u2014 the Pod must become Ready first.",
+      "weight_ratio": 1.0
     }
   ],
   "solution": {

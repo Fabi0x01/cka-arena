@@ -11,7 +11,7 @@
   "difficulty": "exam_standard",
   "weight": 4,
   "estimated_minutes": 4,
-  "prompt": "Service `web-svc` in namespace `cka-sn-port` forwards port `80` to container port `8080`, but the Pods listen on `80`, so requests fail.\n\nPerform the following tasks:\n1. Fix Service `web-svc` so HTTP on port `80` reaches the Pods.\n2. Keep the Service type `ClusterIP`.",
+  "prompt": "Service `web-svc` in namespace `cka-sn-port` fails to forward HTTP traffic on port `80` to the Pods of Deployment `web`.\n\nPerform the following tasks:\n1. Fix Service `web-svc` so HTTP on port `80` reaches container port `80` on the `web` Pods.\n2. Keep the Service type `ClusterIP`.",
   "copy_tokens": [
     "web-svc",
     "cka-sn-port",
@@ -47,7 +47,8 @@
         "operator": "equals",
         "expected": "80"
       },
-      "failure_hint": "Patch the Service port targetPort to 80."
+      "failure_hint": "Patch the Service port targetPort to 80.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-http",
@@ -69,7 +70,8 @@
         ],
         "stdout_contains": "200"
       },
-      "failure_hint": "The Service forwards to the wrong container port."
+      "failure_hint": "The Service forwards to the wrong container port.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-type",
@@ -83,7 +85,8 @@
         "operator": "equals",
         "expected": "ClusterIP"
       },
-      "failure_hint": "Do not change the Service type."
+      "failure_hint": "Do not change the Service type.",
+      "weight_ratio": 1.0
     }
   ],
   "solution": {

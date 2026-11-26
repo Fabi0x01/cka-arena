@@ -11,7 +11,7 @@
   "difficulty": "exam_standard",
   "weight": 4,
   "estimated_minutes": 4,
-  "prompt": "Node `node02` carries the taint `cka-arena/practice=critical:NoSchedule`. Deployment `web` in namespace `cka-wl-taint` is pinned to `node02`, so its Pod stays `Pending`.\n\nPerform the following tasks:\n1. Make the Pod of Deployment `web` schedulable on `node02`.\n2. Keep the Pod pinned to `node02` via its existing nodeSelector.",
+  "prompt": "Deployment `web` in namespace `cka-wl-taint` is pinned to worker `node02` via `nodeSelector`, but its Pod remains `Pending`.\n\nPerform the following tasks:\n1. Make Deployment `web` schedulable on `node02` by tolerating the active node taint (`cka-arena/practice=critical:NoSchedule`).\n2. Keep the Pod pinned to `node02` via its existing `nodeSelector`.",
   "copy_tokens": [
     "node02",
     "cka-arena/practice=critical:NoSchedule",
@@ -46,7 +46,8 @@
         "label_selector": "app=web",
         "min_ready": 1
       },
-      "failure_hint": "Add a toleration for key cka-arena/practice, value critical, effect NoSchedule."
+      "failure_hint": "Add a toleration for key cka-arena/practice, value critical, effect NoSchedule.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-node-selector",
@@ -60,7 +61,8 @@
         "operator": "contains",
         "expected": "node02"
       },
-      "failure_hint": "Do not remove the nodeSelector; add a toleration instead."
+      "failure_hint": "Do not remove the nodeSelector; add a toleration instead.",
+      "weight_ratio": 1.0
     }
   ],
   "solution": {

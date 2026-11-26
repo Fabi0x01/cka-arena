@@ -22,6 +22,7 @@ from app.study.service import (
     get_topic,
     set_stage,
     submit_quiz,
+    topic_id_for_archetype,
 )
 
 __all__ = [
@@ -44,4 +45,5 @@ __all__ = [
     "get_topic",
     "set_stage",
     "submit_quiz",
+    "topic_id_for_archetype",
 ]

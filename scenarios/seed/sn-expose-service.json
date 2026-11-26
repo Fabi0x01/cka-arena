@@ -46,7 +46,8 @@
         "name": "web-svc",
         "namespace": "cka-net"
       },
-      "failure_hint": "Create the Service with `kubectl expose` or a manifest."
+      "failure_hint": "Create the Service with `kubectl expose` or a manifest.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-service-type",
@@ -60,7 +61,8 @@
         "operator": "equals",
         "expected": "ClusterIP"
       },
-      "failure_hint": "The Service type must be `ClusterIP`."
+      "failure_hint": "The Service type must be `ClusterIP`.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-http-reachable",
@@ -82,7 +84,8 @@
         ],
         "stdout_contains": "200"
       },
-      "failure_hint": "DNS or endpoints are not working: verify the Service selector matches the Pod labels and the targetPort is 80."
+      "failure_hint": "DNS or endpoints are not working: verify the Service selector matches the Pod labels and the targetPort is 80.",
+      "weight_ratio": 1.0
     }
   ],
   "solution": {

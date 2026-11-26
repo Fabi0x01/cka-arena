@@ -69,12 +69,31 @@ HOST_PATH_ROOTS = (
 
 _SPOILER_PATTERNS = (
     re.compile(
-        r"\bbecause\s+(?:the\s+|its?\s+|a\s+|wrong\s+)?(?:selector|container\s+command|image\s+tag|targetport|readiness\s*probe|liveness\s*probe|rolebinding|networkpolicy)\b",
+        r"\bbecause\s+(?:of\s+)?(?:the\s+|its?\s+|a\s+|an\s+|wrong\s+|missing\s+|incorrect\s+)?(?:selector|container\s+command|image\s+tag|targetport|readiness\s*probe|liveness\s*probe|rolebinding|networkpolicy|port\s+mismatch|wrong\s+command|typo|missing\s+port)\b",
+        re.I,
+    ),
+    re.compile(
+        r"\bhas\s+(?:a\s+|an\s+)?(?:wrong\s+(?:selector|targetport|image|command|tag|rolebinding|mountpath)|typo\s+in|missing\s+(?:selector|label|port|volumemount))\b",
         re.I,
     ),
     re.compile(r"\b(?:run|execute)\s+`?kubectl\s+(?:patch|set\s+image|edit|taint|expose)\b", re.I),
     re.compile(r"\bmissing\s+(?:tolerations?|egress\s+rule\s+for\s+port\s+53|label)\s+is\s+the\s+cause\b", re.I),
 )
+
+_SPOILER_NAMESPACE_RE = re.compile(
+    r"^(?:broken|fix|wrong|crashloop|oom|taint|rbac-fix|netpol-broken|fail|error|bad)(?:-|$)",
+    re.I,
+)
+
+CLUSTER_SCOPED_MANIFEST_KINDS = frozenset({
+    "persistentvolume",
+    "clusterrole",
+    "clusterrolebinding",
+    "storageclass",
+    "customresourcedefinition",
+    "priorityclass",
+    "certificatesigningrequest",
+})
 
 
 def image_allowed(image: str) -> bool:
@@ -281,6 +300,14 @@ def param_errors(env: ScenarioEnvelope) -> list[str]:
             params["min_ready"] = params["ready"]
 
         required_keys = list(required.get(check.type, ()))
+        if check.type == "kubectl_auth_can_i":
+            required_keys = ["verb", "resource"]
+            if not params.get("service_account") and not params.get("user"):
+                errors.append(f"check {check.id}: kubectl_auth_can_i precisa de service_account ou user")
+            if params.get("service_account") and not params.get("namespace"):
+                required_keys.append("namespace")
+            if not params.get("cluster_scoped") and not params.get("target_namespace") and not params.get("namespace"):
+                errors.append(f"check {check.id}: kubectl_auth_can_i precisa de namespace ou cluster_scoped=true")
         if check.type == "kubectl_jsonpath":
             jsonpath = str(params.get("jsonpath") or "").strip()
             if jsonpath and not jsonpath.startswith("{"):
@@ -404,7 +431,10 @@ async def wait_namespace_gone(namespace: str, timeout_s: float = 40) -> None:
 
 
 async def validate_gates(
-    env: ScenarioEnvelope, *, archetype: curriculum.Archetype | None = None
+    env: ScenarioEnvelope,
+    *,
+    archetype: curriculum.Archetype | None = None,
+    require_pedagogy: bool = False,
 ) -> list[str]:
     errors: list[str] = []
 
@@ -560,6 +590,84 @@ async def validate_gates(
     errors.extend(host_path_errors(env))
     errors.extend(consistency_errors(env))
     errors.extend(namespace_errors(env))
+    errors.extend(neutral_namespace_errors(env))
+    errors.extend(boss_fight_fault_errors(env))
+    errors.extend(etcd_snapshot_check_errors(env))
+    errors.extend(cluster_cleanup_errors(env))
+    if require_pedagogy:
+        errors.extend(pedagogy_errors(env))
     errors.extend(tier_band_errors(env))
     errors.extend(archetype_alignment_errors(env, archetype))
+    return errors
+
+
+def neutral_namespace_errors(env: ScenarioEnvelope) -> list[str]:
+    errors: list[str] = []
+    for ns in env.setup.namespaces:
+        if ns.startswith("cka-gen"):
+            continue
+        if _SPOILER_NAMESPACE_RE.match(ns):
+            errors.append(
+                f"namespace spoiler não-neutro '{ns}': use namespace neutro de negócio (ex: checkout, billing, orders)"
+            )
+    return errors
+
+
+def boss_fight_fault_errors(env: ScenarioEnvelope) -> list[str]:
+    if env.difficulty != "boss_fight":
+        return []
+    real_faults = []
+    for nc in env.setup.node_commands:
+        cmd = (nc.command or "").strip()
+        if cmd and cmd not in ("true", ":") and not re.fullmatch(r"echo\b.*", cmd):
+            real_faults.append(cmd)
+    if not real_faults:
+        return [
+            "boss_fight requer ao menos 1 falha real em setup.node_commands (ex: stop kubelet, manifest estático, config no nó)"
+        ]
+    return []
+
+
+def etcd_snapshot_check_errors(env: ScenarioEnvelope) -> list[str]:
+    errors: list[str] = []
+    for check in env.checks:
+        if check.type == "host_file_contains":
+            path = str((check.params or {}).get("path") or "").lower()
+            pats = [str(p) for p in ((check.params or {}).get("regex_patterns") or [])]
+            if ("etcd" in path or path.endswith(".db")) and any(p in ("(?s).+", ".+", ".*") for p in pats):
+                errors.append(
+                    f"check {check.id}: snapshot etcd não deve usar regex trivial '{pats[0]}' — use node_command_exit_zero com etcdutl/etcdctl snapshot status"
+                )
+    return errors
+
+
+def cluster_cleanup_errors(env: ScenarioEnvelope) -> list[str]:
+    created_cluster_kinds: set[str] = set()
+    for text in list(env.setup.manifests) + list(env.solution.manifests):
+        try:
+            for doc in yaml.safe_load_all(text):
+                if isinstance(doc, dict):
+                    kind = str(doc.get("kind") or "").lower()
+                    if kind in CLUSTER_SCOPED_MANIFEST_KINDS:
+                        created_cluster_kinds.add(kind)
+        except yaml.YAMLError:
+            continue
+    if not created_cluster_kinds:
+        return []
+    has_cleanup = bool(env.cleanup.commands or env.cleanup.kubectl_commands)
+    manifests_blob = "\n".join(env.setup.manifests)
+    has_label_teardown = "cka-arena/scenario" in manifests_blob
+    if not has_cleanup and not has_label_teardown:
+        return [
+            f"recursos cluster-scoped {sorted(created_cluster_kinds)} exigem remoção explícita em cleanup.commands"
+        ]
+    return []
+
+
+def pedagogy_errors(env: ScenarioEnvelope) -> list[str]:
+    errors: list[str] = []
+    if len(env.hints) < 2 or any(not str(h).strip() for h in env.hints[:2]):
+        errors.append("cenário v1.2 requer ao menos 2 hints progressivos sem spoilers")
+    if not env.fast_solution_commands or not any(str(c).strip() for c in env.fast_solution_commands):
+        errors.append("cenário v1.2 requer ao menos 1 fast_solution_commands real")
     return errors

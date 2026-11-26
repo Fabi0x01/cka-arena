@@ -51,6 +51,7 @@ class HealthResponse(BaseModel):
     total_nodes: int
     nodes: list[NodeHealth]
     kubectl_ok: bool
+    k8s_version: str | None = None
     kubeconfig: str
     addons: list[AddonHealth]
     bootstrap_plan: list[dict] = Field(default_factory=list)

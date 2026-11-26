@@ -82,7 +82,7 @@ export function initTerminal() {
     add.className = "tab";
     add.title = "Open new local host tab";
     add.appendChild(iconEl("plus", 13));
-    add.onclick = () => openTab("host", null, "mac");
+    add.onclick = () => openTab("host", null, "workstation");
     tabsEl.appendChild(add);
   }
 
@@ -189,7 +189,7 @@ export function initTerminal() {
           );
           return false;
         }
-        if (ev.metaKey && !ev.ctrlKey && ["k", "l", "b", "f", "\\", "/", "1", "2", "3", "4", "enter", "=", "+", "-", "0"].includes(key)) {
+        if (ev.metaKey && !ev.ctrlKey && ["k", "l", "b", "f", "\\", "/", "1", "2", "3", "4", "5", "enter", "=", "+", "-", "0"].includes(key)) {
           return false;
         }
         return true;
@@ -257,7 +257,7 @@ export function initTerminal() {
     button.onclick = () => {
       try { newTabMenu.hidePopover?.(); } catch { /* noop */ }
       const node = button.dataset.node || null;
-      openTab(button.dataset.openTab, node, node || "mac");
+      openTab(button.dataset.openTab, node, node || "workstation");
     };
   });
 
@@ -353,11 +353,11 @@ export function initTerminal() {
         const { tabs: live } = await api("/api/terminal/tabs");
         const host = live.find((tab) => tab.preset === "host" && (tab.subscribers || 0) === 0);
         if (host) {
-          await attachExisting(host, "mac");
+          await attachExisting(host, "workstation");
           return;
         }
       } catch { /* follow create path */ }
-      await openTab("host", null, "mac");
+      await openTab("host", null, "workstation");
     },
     sendCommand,
     openSearch,

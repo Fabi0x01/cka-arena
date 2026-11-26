@@ -44,7 +44,8 @@
         "label_selector": "app=web",
         "min_ready": 1
       },
-      "failure_hint": "The Pod references a missing claim \u2014 point it at pvc-data."
+      "failure_hint": "The Pod references a missing claim \u2014 point it at pvc-data.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-claim",
@@ -58,7 +59,8 @@
         "operator": "equals",
         "expected": "pvc-data"
       },
-      "failure_hint": "Recreate the Pod with claimName pvc-data."
+      "failure_hint": "Recreate the Pod with claimName pvc-data.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-pvc",
@@ -72,7 +74,8 @@
         "operator": "equals",
         "expected": "Bound"
       },
-      "failure_hint": "The claim is provided by the scenario; keep it."
+      "failure_hint": "The claim is provided by the scenario; keep it.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-image",
@@ -86,7 +89,8 @@
         "operator": "equals",
         "expected": "nginx:1.27-alpine"
       },
-      "failure_hint": "Do not change the Pod image."
+      "failure_hint": "Do not change the Pod image.",
+      "weight_ratio": 1.0
     }
   ],
   "solution": {

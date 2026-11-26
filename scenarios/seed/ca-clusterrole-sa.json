@@ -1,0 +1,70 @@
+{
+  "schema_version": "1.2",
+  "id": "seed-ca-clusterrole-sa",
+  "title": "Bind ClusterRole to ServiceAccount",
+  "domain": "Cluster Architecture, Installation & Configuration",
+  "subtopics": ["RBAC", "ClusterRole", "ClusterRoleBinding", "ServiceAccount"],
+  "difficulty": "exam_standard",
+  "weight": 5,
+  "estimated_minutes": 4,
+  "prompt": "Operations tooling in namespace `cka-crb` needs read-only cluster visibility into PersistentVolumes and Nodes using a dedicated identity.\n\nPerform the following tasks:\n1. Create ServiceAccount `infra-viewer` in namespace `cka-crb` and ClusterRole `cr-cka-crb-pv-node` granting `get`, `list`, and `watch` on `persistentvolumes` and `nodes`.\n2. Create ClusterRoleBinding `crb-cka-crb-pv-node` binding ClusterRole `cr-cka-crb-pv-node` to ServiceAccount `infra-viewer` in namespace `cka-crb`.",
+  "copy_tokens": ["cka-crb", "infra-viewer", "cr-cka-crb-pv-node", "crb-cka-crb-pv-node"],
+  "docs_links": [
+    {"label": "Using RBAC Authorization", "url": "https://kubernetes.io/docs/reference/access-authn-authz/rbac/"}
+  ],
+  "hints": [
+    "Use `kubectl create clusterrole` and `kubectl create clusterrolebinding --dry-run=client -o yaml` to scaffold quickly.",
+    "Both `persistentvolumes` and `nodes` are cluster-scoped resources in the core API group."
+  ],
+  "fast_solution_commands": [
+    "k -n cka-crb create sa infra-viewer",
+    "k create clusterrole cr-cka-crb-pv-node --verb=get,list,watch --resource=persistentvolumes,nodes",
+    "k create clusterrolebinding crb-cka-crb-pv-node --clusterrole=cr-cka-crb-pv-node --serviceaccount=cka-crb:infra-viewer"
+  ],
+  "setup": {
+    "namespaces": ["cka-crb"],
+    "manifests": []
+  },
+  "checks": [
+    {
+      "id": "chk-sa",
+      "description": "ServiceAccount `infra-viewer` exists in `cka-crb`",
+      "type": "kubectl_resource_exists",
+      "params": {"kind": "serviceaccount", "name": "infra-viewer", "namespace": "cka-crb"},
+      "weight_ratio": 0.5
+    },
+    {
+      "id": "chk-can-list-pv",
+      "description": "ServiceAccount `infra-viewer` can list `persistentvolumes` cluster-wide",
+      "type": "kubectl_auth_can_i",
+      "params": {"verb": "list", "resource": "persistentvolumes", "service_account": "infra-viewer", "namespace": "cka-crb", "cluster_scoped": true, "expected_allowed": true},
+      "weight_ratio": 1.0
+    },
+    {
+      "id": "chk-can-get-nodes",
+      "description": "ServiceAccount `infra-viewer` can get `nodes` cluster-wide",
+      "type": "kubectl_auth_can_i",
+      "params": {"verb": "get", "resource": "nodes", "service_account": "infra-viewer", "namespace": "cka-crb", "cluster_scoped": true, "expected_allowed": true},
+      "weight_ratio": 1.0
+    }
+  ],
+  "solution": {
+    "manifests": [],
+    "commands": [
+      "kubectl create clusterrole cr-cka-crb-pv-node --verb=get,list,watch --resource=persistentvolumes,nodes",
+      "kubectl -n cka-crb create serviceaccount infra-viewer",
+      "kubectl create clusterrolebinding crb-cka-crb-pv-node --clusterrole=cr-cka-crb-pv-node --serviceaccount=cka-crb:infra-viewer"
+    ]
+  },
+  "cleanup": {
+    "namespaces": ["cka-crb"],
+    "commands": [
+      "kubectl delete clusterrolebinding crb-cka-crb-pv-node --ignore-not-found",
+      "kubectl delete clusterrole cr-cka-crb-pv-node --ignore-not-found"
+    ]
+  },
+  "reference_solution": "Create the ServiceAccount, ClusterRole, and ClusterRoleBinding imperatively.",
+  "destructive": false,
+  "archetype_id": "ca-clusterrole-sa",
+  "context_command": "kubectl config use-context cka"
+}

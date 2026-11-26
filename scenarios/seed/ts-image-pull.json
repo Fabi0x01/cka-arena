@@ -41,7 +41,8 @@
         "label_selector": "app=web",
         "min_ready": 1
       },
-      "failure_hint": "The image tag cannot be pulled \u2014 set the image to nginx:1.27-alpine."
+      "failure_hint": "The image tag cannot be pulled \u2014 set the image to nginx:1.27-alpine.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-image",
@@ -55,7 +56,8 @@
         "operator": "equals",
         "expected": "nginx:1.27-alpine"
       },
-      "failure_hint": "Use kubectl set image deployment/web web=nginx:1.27-alpine -n cka-ts-image."
+      "failure_hint": "Use kubectl set image deployment/web web=nginx:1.27-alpine -n cka-ts-image.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-available",
@@ -69,7 +71,8 @@
         "operator": "gte",
         "expected": 1
       },
-      "failure_hint": "No replica is available while the image cannot be pulled."
+      "failure_hint": "No replica is available while the image cannot be pulled.",
+      "weight_ratio": 1.0
     }
   ],
   "solution": {

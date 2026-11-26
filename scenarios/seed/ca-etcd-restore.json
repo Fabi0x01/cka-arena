@@ -1,0 +1,96 @@
+{
+  "schema_version": "1.2",
+  "id": "seed-ca-etcd-restore",
+  "title": "Restore Etcd Snapshot & Reconfigure Manifest",
+  "domain": "Cluster Architecture, Installation & Configuration",
+  "subtopics": ["etcd", "backup", "restore", "static-pods"],
+  "difficulty": "killer_hardcore",
+  "weight": 10,
+  "estimated_minutes": 7,
+  "prompt": "A pre-captured etcd snapshot exists on `controlplane` at `/opt/cka-restore/snap.db`. You must verify disaster-recovery procedures by restoring this snapshot into a clean data directory.\n\nPerform the following tasks:\n1. Restore the etcd snapshot `/opt/cka-restore/snap.db` on `controlplane` to data directory `/var/lib/etcd-restore`.\n2. Update `/etc/kubernetes/manifests/etcd.yaml` so etcd mounts and uses `/var/lib/etcd-restore` as its `etcd-data` hostPath.\n3. Wait for `etcd` and the Kubernetes API server to recover cleanly and confirm ConfigMap `restore-anchor` and Secret `restore-secret` exist in namespace `cka-etcd-restore`.",
+  "copy_tokens": ["controlplane", "/opt/cka-restore/snap.db", "/var/lib/etcd-restore", "/etc/kubernetes/manifests/etcd.yaml", "etcd-data", "restore-anchor", "restore-secret", "cka-etcd-restore"],
+  "docs_links": [
+    {"label": "Restoring an etcd cluster", "url": "https://kubernetes.io/docs/tasks/administer-cluster/configure-upgrade-etcd/#restoring-an-etcd-cluster"}
+  ],
+  "hints": [
+    "Extract `--name`, `--initial-cluster`, and `--initial-advertise-peer-urls` from `/etc/kubernetes/manifests/etcd.yaml`, then run `sudo etcdutl snapshot restore /opt/cka-restore/snap.db --name=<name> --initial-cluster=<cluster> --initial-advertise-peer-urls=<peer> --data-dir=/var/lib/etcd-restore`.",
+    "Edit `/etc/kubernetes/manifests/etcd.yaml` and update `volumes` -> `name: etcd-data` -> `hostPath.path` to `/var/lib/etcd-restore`."
+  ],
+  "fast_solution_commands": [
+    "ssh controlplane 'sudo grep -E \"name=|initial-cluster=|initial-advertise-peer-urls=\" /etc/kubernetes/manifests/etcd.yaml'",
+    "ssh controlplane 'sudo etcdutl snapshot restore /opt/cka-restore/snap.db --name=<NAME> --initial-cluster=<CLUSTER> --initial-advertise-peer-urls=<PEER> --data-dir=/var/lib/etcd-restore'",
+    "ssh controlplane 'sudo sed -i \"s|path: /var/lib/etcd$|path: /var/lib/etcd-restore|g\" /etc/kubernetes/manifests/etcd.yaml'"
+  ],
+  "setup": {
+    "namespaces": ["cka-etcd-restore"],
+    "manifests": [
+      "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: restore-anchor\n  namespace: cka-etcd-restore\ndata:\n  status: snapshotted\n---\napiVersion: v1\nkind: Secret\nmetadata:\n  name: restore-secret\n  namespace: cka-etcd-restore\nstringData:\n  token: snapshotted\n"
+    ],
+    "node_commands": [
+      {
+        "node": "controlplane",
+        "sudo": true,
+        "backup_paths": [],
+        "command": "rm -r -f /opt/cka-restore /var/lib/etcd-restore && mkdir -p /opt/cka-restore && ETCDCTL_API=3 etcdctl --endpoints=https://127.0.0.1:2379 --cacert=/etc/kubernetes/pki/etcd/ca.crt --cert=/etc/kubernetes/pki/etcd/server.crt --key=/etc/kubernetes/pki/etcd/server.key snapshot save /opt/cka-restore/snap.db"
+      }
+    ]
+  },
+  "checks": [
+    {
+      "id": "chk-restore-dir",
+      "description": "Restored etcd member directory exists at `/var/lib/etcd-restore/member`",
+      "type": "node_command_exit_zero",
+      "params": {"node": "controlplane", "command": "(sudo test -d /var/lib/etcd-restore/member 2>/dev/null || test -d /var/lib/etcd-restore/member) && echo RESTORED", "stdout_contains": "RESTORED"},
+      "weight_ratio": 1.0
+    },
+    {
+      "id": "chk-etcd-manifest",
+      "description": "`/etc/kubernetes/manifests/etcd.yaml` points hostPath to `/var/lib/etcd-restore`",
+      "type": "host_file_contains",
+      "params": {"location": "controlplane", "path": "/etc/kubernetes/manifests/etcd.yaml", "regex_patterns": ["/var/lib/etcd-restore"]},
+      "weight_ratio": 1.0
+    },
+    {
+      "id": "chk-anchor-cm",
+      "description": "ConfigMap `restore-anchor` exists in `cka-etcd-restore`",
+      "type": "kubectl_resource_exists",
+      "params": {"kind": "configmap", "name": "restore-anchor", "namespace": "cka-etcd-restore"},
+      "weight_ratio": 0.5
+    },
+    {
+      "id": "chk-anchor-secret",
+      "description": "Secret `restore-secret` exists in `cka-etcd-restore`",
+      "type": "kubectl_resource_exists",
+      "params": {"kind": "secret", "name": "restore-secret", "namespace": "cka-etcd-restore"},
+      "weight_ratio": 0.5
+    }
+  ],
+  "solution": {
+    "manifests": [],
+    "commands": [],
+    "node_commands": [
+      {
+        "node": "controlplane",
+        "sudo": true,
+        "backup_paths": [],
+        "command": "rm -r -f /var/lib/etcd-restore && NAME=$(grep -oE -- '--name=[^\" ]+' /etc/kubernetes/manifests/etcd.yaml | head -n1 | cut -d= -f2-) && INIT_CLUSTER=$(grep -oE -- '--initial-cluster=[^\" ]+' /etc/kubernetes/manifests/etcd.yaml | head -n1 | cut -d= -f2-) && PEER_URLS=$(grep -oE -- '--initial-advertise-peer-urls=[^\" ]+' /etc/kubernetes/manifests/etcd.yaml | head -n1 | cut -d= -f2-) && (command -v etcdutl >/dev/null 2>&1 && etcdutl snapshot restore /opt/cka-restore/snap.db --name=\"$NAME\" --initial-cluster=\"$INIT_CLUSTER\" --initial-advertise-peer-urls=\"$PEER_URLS\" --data-dir=/var/lib/etcd-restore || ETCDCTL_API=3 etcdctl snapshot restore /opt/cka-restore/snap.db --name=\"$NAME\" --initial-cluster=\"$INIT_CLUSTER\" --initial-advertise-peer-urls=\"$PEER_URLS\" --data-dir=/var/lib/etcd-restore) && sed -i 's|path: /var/lib/etcd$|path: /var/lib/etcd-restore|' /etc/kubernetes/manifests/etcd.yaml && sleep 6 && for i in $(seq 1 35); do kubectl --kubeconfig=/etc/kubernetes/admin.conf get --raw=/readyz >/dev/null 2>&1 && break; sleep 2; done"
+      }
+    ]
+  },
+  "cleanup": {
+    "namespaces": ["cka-etcd-restore"],
+    "node_commands": [
+      {
+        "node": "controlplane",
+        "sudo": true,
+        "backup_paths": [],
+        "command": "sed -i 's|path: /var/lib/etcd-restore|path: /var/lib/etcd|g' /etc/kubernetes/manifests/etcd.yaml && rm -r -f /opt/cka-restore /var/lib/etcd-restore && sleep 6 && for i in $(seq 1 35); do kubectl --kubeconfig=/etc/kubernetes/admin.conf get --raw=/readyz >/dev/null 2>&1 && break; sleep 2; done"
+      }
+    ]
+  },
+  "reference_solution": "Restore `/opt/cka-restore/snap.db` into `/var/lib/etcd-restore` with `--name`, `--initial-cluster`, and `--initial-advertise-peer-urls` matching `/etc/kubernetes/manifests/etcd.yaml` using `etcdutl` (or `etcdctl`), then update `etcd-data` hostPath in `/etc/kubernetes/manifests/etcd.yaml`.",
+  "destructive": true,
+  "archetype_id": "ca-etcd-restore",
+  "context_command": "kubectl config use-context cka",
+  "ssh_target": "controlplane"
+}

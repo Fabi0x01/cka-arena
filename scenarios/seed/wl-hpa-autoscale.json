@@ -1,0 +1,65 @@
+{
+  "schema_version": "1.2",
+  "id": "seed-wl-hpa-autoscale",
+  "title": "Configure Deployment HPA Autoscaling",
+  "domain": "Workloads & Scheduling",
+  "subtopics": ["HorizontalPodAutoscaler", "metrics-server", "Deployment"],
+  "difficulty": "exam_standard",
+  "weight": 5,
+  "estimated_minutes": 4,
+  "prompt": "Workload `api` in namespace `cka-hpa` runs with static scaling and must automatically scale based on CPU utilization.\n\nPerform the following tasks:\n1. Create a `HorizontalPodAutoscaler` named `api-hpa` in namespace `cka-hpa` targeting Deployment `api`.\n2. Configure `api-hpa` with minimum replicas `2`, maximum replicas `5`, and target average CPU utilization `70%`.",
+  "copy_tokens": ["api", "cka-hpa", "api-hpa", "70%"],
+  "docs_links": [
+    {"label": "Horizontal Pod Autoscaling", "url": "https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/"}
+  ],
+  "hints": [
+    "Ensure container resource CPU requests exist on `api` (already configured) before creating the HPA.",
+    "Use `kubectl -n cka-hpa autoscale deployment api --cpu-percent=70 --min=2 --max=5` or apply an `autoscaling/v2` YAML."
+  ],
+  "fast_solution_commands": [
+    "k -n cka-hpa autoscale deployment api --cpu-percent=70 --min=2 --max=5",
+    "k -n cka-hpa patch hpa api-hpa --type=merge -p '{\"metadata\":{\"name\":\"api-hpa\"}}'"
+  ],
+  "setup": {
+    "namespaces": ["cka-hpa"],
+    "manifests": [
+      "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\n  namespace: cka-hpa\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: api\n  template:\n    metadata:\n      labels:\n        app: api\n    spec:\n      containers:\n      - name: web\n        image: nginx:1.27-alpine\n        resources:\n          requests:\n            cpu: 50m\n            memory: 32Mi\n"
+    ]
+  },
+  "checks": [
+    {
+      "id": "chk-hpa-exists",
+      "description": "HorizontalPodAutoscaler `api-hpa` exists in `cka-hpa`",
+      "type": "kubectl_resource_exists",
+      "params": {"kind": "hpa", "name": "api-hpa", "namespace": "cka-hpa"},
+      "weight_ratio": 1.0
+    },
+    {
+      "id": "chk-hpa-min-max",
+      "description": "HPA minReplicas=2 and maxReplicas=5",
+      "type": "kubectl_jsonpath",
+      "params": {"kind": "hpa", "name": "api-hpa", "namespace": "cka-hpa", "jsonpath": "{.spec.maxReplicas}", "operator": "equals_int", "expected": 5},
+      "weight_ratio": 1.0
+    },
+    {
+      "id": "chk-deploy-ready",
+      "description": "Deployment `api` has at least 2 ready replicas",
+      "type": "deployment_rollout_ready",
+      "params": {"namespace": "cka-hpa", "name": "api", "min_ready_replicas": 2},
+      "weight_ratio": 1.0
+    }
+  ],
+  "solution": {
+    "manifests": [
+      "apiVersion: autoscaling/v2\nkind: HorizontalPodAutoscaler\nmetadata:\n  name: api-hpa\n  namespace: cka-hpa\nspec:\n  scaleTargetRef:\n    apiVersion: apps/v1\n    kind: Deployment\n    name: api\n  minReplicas: 2\n  maxReplicas: 5\n  metrics:\n  - type: Resource\n    resource:\n      name: cpu\n      target:\n        type: Utilization\n        averageUtilization: 70\n"
+    ],
+    "commands": []
+  },
+  "cleanup": {
+    "namespaces": ["cka-hpa"]
+  },
+  "reference_solution": "Create HorizontalPodAutoscaler `api-hpa` targeting Deployment `api` with minReplicas 2, maxReplicas 5, and CPU utilization 70%.",
+  "destructive": false,
+  "archetype_id": "wl-hpa-autoscale",
+  "context_command": "kubectl config use-context cka"
+}

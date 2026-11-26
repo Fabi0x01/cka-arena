@@ -1,0 +1,64 @@
+{
+  "schema_version": "1.2",
+  "id": "seed-st-pvc-local-path",
+  "title": "Bind Dynamic PVC & Mount in Deployment",
+  "domain": "Storage",
+  "subtopics": ["StorageClass", "local-path", "PersistentVolumeClaim"],
+  "difficulty": "exam_standard",
+  "weight": 5,
+  "estimated_minutes": 4,
+  "prompt": "Workload `cache` in namespace `cka-sc` requires dynamically provisioned persistent storage.\n\nPerform the following tasks:\n1. Create PersistentVolumeClaim `cache-pvc` in namespace `cka-sc` requesting `200Mi`, `ReadWriteOnce`, using StorageClass `local-path`.\n2. Create Deployment `cache` (`1` replica, `image: nginx:1.27-alpine`, container `web`) mounting `cache-pvc` at `/data`.",
+  "copy_tokens": ["cka-sc", "cache-pvc", "local-path", "cache", "/data"],
+  "docs_links": [
+    {"label": "Storage Classes", "url": "https://kubernetes.io/docs/concepts/storage/storage-classes/"}
+  ],
+  "hints": [
+    "In WaitForFirstConsumer StorageClasses like `local-path`, the PVC binds once a Pod consuming it is scheduled.",
+    "Check PVC status (`k -n cka-sc get pvc`) after creating Deployment `cache`."
+  ],
+  "fast_solution_commands": [
+    "k get sc local-path",
+    "k -n cka-sc create deploy cache --image=nginx:1.27-alpine $do"
+  ],
+  "setup": {
+    "namespaces": ["cka-sc"],
+    "manifests": []
+  },
+  "checks": [
+    {
+      "id": "chk-pvc-bound",
+      "description": "PVC `cache-pvc` is Bound using `local-path`",
+      "type": "pvc_bound",
+      "params": {"namespace": "cka-sc", "name": "cache-pvc", "storage_class": "local-path"},
+      "weight_ratio": 1.0
+    },
+    {
+      "id": "chk-deploy-ready",
+      "description": "Deployment `cache` is Running and Ready",
+      "type": "deployment_rollout_ready",
+      "params": {"namespace": "cka-sc", "name": "cache", "min_ready_replicas": 1, "expected_image": "nginx:1.27-alpine"},
+      "weight_ratio": 1.0
+    },
+    {
+      "id": "chk-mount-path",
+      "description": "Deployment mounts `cache-pvc` at `/data`",
+      "type": "kubectl_jsonpath",
+      "params": {"kind": "deployment", "name": "cache", "namespace": "cka-sc", "jsonpath": "{.spec.template.spec.containers[0].volumeMounts[0].mountPath}", "operator": "equals", "expected": "/data"},
+      "weight_ratio": 0.5
+    }
+  ],
+  "solution": {
+    "manifests": [
+      "apiVersion: v1\nkind: PersistentVolumeClaim\nmetadata:\n  name: cache-pvc\n  namespace: cka-sc\nspec:\n  storageClassName: local-path\n  accessModes:\n  - ReadWriteOnce\n  resources:\n    requests:\n      storage: 200Mi\n",
+      "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: cache\n  namespace: cka-sc\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: cache\n  template:\n    metadata:\n      labels:\n        app: cache\n    spec:\n      containers:\n      - name: web\n        image: nginx:1.27-alpine\n        volumeMounts:\n        - name: vol\n          mountPath: /data\n      volumes:\n      - name: vol\n        persistentVolumeClaim:\n          claimName: cache-pvc\n"
+    ],
+    "commands": []
+  },
+  "cleanup": {
+    "namespaces": ["cka-sc"]
+  },
+  "reference_solution": "Create `cache-pvc` using `storageClassName: local-path` and mount it at `/data` inside Deployment `cache`.",
+  "destructive": false,
+  "archetype_id": "st-pvc-local-path",
+  "context_command": "kubectl config use-context cka"
+}

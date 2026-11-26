@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -14,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app import bank, config, db, mastery, provider, setup_wire, ssh_runner, study, telemetry
+from app import addons as addons_mod, backup as backup_mod, bank, config, db, mastery, provider, setup_wire, ssh_runner, study, telemetry
 from app.cluster_lease import ClusterBusyError, ClusterLease
 from app.doctor import ClusterDoctor
 from app.events import EventBroker, sse_format
@@ -59,6 +60,8 @@ class PracticeRequest(BaseModel):
     mode: str = "study"
     variant: str | None = None
     archetype_id: str | None = None
+    allow_destructive: bool | None = None
+    strict_psi: bool = False
 
 
 class ItemStateRequest(BaseModel):
@@ -80,11 +83,24 @@ class FinishRequest(BaseModel):
 
 class RetireRequest(BaseModel):
     reason: str = "retired by user"
+    reason_code: str = "other"
+
+
+class FeedbackRequest(BaseModel):
+    reason_code: str = "other"
+    note: str = ""
 
 
 class TerminalTabRequest(BaseModel):
     preset: str = "host"
     node: str | None = None
+    strict_psi: bool | None = None
+
+
+class PreferencesRequest(BaseModel):
+    exam_target_date: str | None = None
+    strict_psi_default: bool | None = None
+    allow_destructive_practice: bool | None = None
 
 
 class StudyStageRequest(BaseModel):
@@ -295,6 +311,26 @@ async def sync_cluster_profile():
     return {"ok": all(results.values()), "nodes": results}
 
 
+@app.post("/api/cluster/install-addons")
+async def install_cluster_addons():
+    results = {
+        "metrics_server": await addons_mod.install_metrics_server(),
+        "gateway_api": await addons_mod.install_gateway(),
+        "local_path_storage": await addons_mod.install_local_path(),
+    }
+    return {"ok": all(results.values()), "results": results}
+
+
+@app.get("/api/backup/status")
+def get_backup_status():
+    return backup_mod.status_report()
+
+
+@app.post("/api/backup/create")
+def create_backup_snapshot():
+    return backup_mod.create_backup()
+
+
 # ------------------------------------------------------------ generation
 
 @app.post("/api/generate", status_code=202)
@@ -349,6 +385,25 @@ async def generate_fill_gaps(max_count: int = 5):
     return JSONResponse(info, status_code=202)
 
 
+@app.post("/api/generate/fill-archetypes", status_code=202)
+async def generate_fill_archetypes(max_count: int = 8):
+    try:
+        lease.ensure_for_generation()
+    except ClusterBusyError as exc:
+        return JSONResponse(err_body(exc.owner, exc.detail), status_code=409)
+    status = await power.status()
+    if status["state"] != "ready":
+        return JSONResponse(
+            err_body("cluster_not_ready", f"cluster state is '{status['state']}'", "start the cluster first"),
+            status_code=409,
+        )
+    try:
+        info = await pipeline.start_fill_archetypes(max_count=max(1, min(15, max_count)))
+    except GenerationJobActiveError as exc:
+        return JSONResponse(err_body("generation_active", f"a generation job is already running ({exc})"), status_code=409)
+    return JSONResponse(info, status_code=202)
+
+
 @app.post("/api/generate/archetype/{archetype_id}", status_code=202)
 async def generate_for_archetype(archetype_id: str, difficulty: str | None = None):
     try:
@@ -382,6 +437,11 @@ async def readiness():
     return mastery.readiness_report()
 
 
+@app.get("/api/study-plan/today")
+async def study_plan_today():
+    return mastery.daily_study_plan()
+
+
 @app.get("/api/telemetry")
 async def telemetry_summary():
     return telemetry.summary()
@@ -405,15 +465,17 @@ async def bank_preview(
     mode: str = "study",
     variant: str | None = None,
     archetype_id: str | None = None,
+    allow_destructive: bool | None = None,
 ):
     domain_list = [domain for domain in (domains or "").split(",") if domain] or None
     strategy = variant if variant in ("weakness_drill", "speed_blitz", "mistake_replay") else "exam_balanced"
     is_mock = mode == "mock_exam" or variant in ("guided_mock", "blind_exam")
+    effective_destructive = is_mock if allow_destructive is None else allow_destructive
     sample = bank.draw_exam_sample(
         count,
         domains=domain_list,
         difficulty=difficulty,
-        allow_destructive=is_mock,
+        allow_destructive=effective_destructive,
         ensure_disjoint_namespaces=is_mock,
         strategy=strategy,
         archetype_id=archetype_id or None,
@@ -476,6 +538,25 @@ async def repair_bank_question(question_id: str):
         return await pipeline.repair_question(question_id)
     except ValueError as exc:
         return JSONResponse(err_body("not_found", str(exc)), status_code=404)
+
+
+@app.post("/api/bank/questions/{question_id}/polish")
+async def polish_bank_question(question_id: str):
+    try:
+        lease.ensure_for_generation()
+    except ClusterBusyError as exc:
+        return JSONResponse(err_body(exc.owner, exc.detail), status_code=409)
+    try:
+        return await pipeline.polish_question(question_id)
+    except ValueError as exc:
+        return JSONResponse(err_body("not_found", str(exc)), status_code=404)
+
+
+@app.post("/api/bank/questions/{question_id}/feedback")
+async def feedback_bank_question(question_id: str, body: FeedbackRequest):
+    if not bank.get_question(question_id):
+        return JSONResponse(err_body("not_found", "question not found"), status_code=404)
+    return bank.record_feedback(question_id, body.reason_code, body.note)
 
 
 @app.post("/api/bank/questions/{question_id}/retire")
@@ -544,6 +625,27 @@ async def active_session():
     return {"active": await sessions.get(session_id)}
 
 
+@app.get("/api/sessions/history")
+async def sessions_history(limit: int = 20):
+    return {"sessions": sessions.history(limit=limit)}
+
+
+@app.get("/api/sessions/{session_id}/review")
+async def session_review(session_id: str):
+    try:
+        return sessions.review(session_id)
+    except SessionError as exc:
+        return JSONResponse(err_body(exc.code, exc.message), status_code=exc.status)
+
+
+@app.post("/api/sessions/{session_id}/prev")
+async def session_prev(session_id: str):
+    try:
+        return await sessions.prev(session_id)
+    except SessionError as exc:
+        return JSONResponse(err_body(exc.code, exc.message), status_code=exc.status)
+
+
 @app.post("/api/practice", status_code=201)
 async def practice(body: PracticeRequest):
     try:
@@ -555,6 +657,8 @@ async def practice(body: PracticeRequest):
             mode=body.mode,
             variant=body.variant,
             archetype_id=body.archetype_id,
+            allow_destructive=body.allow_destructive,
+            strict_psi=body.strict_psi,
         )
     except ClusterBusyError as exc:
         return JSONResponse(err_body(exc.owner, exc.detail), status_code=409)
@@ -626,7 +730,11 @@ async def session_skip(session_id: str):
 @app.post("/api/sessions/{session_id}/retire")
 async def session_retire_active(session_id: str, body: RetireRequest | None = None):
     try:
-        return await sessions.retire_active(session_id, reason=(body.reason if body else "reported by user"))
+        return await sessions.retire_active(
+            session_id,
+            reason=(body.reason if body else "reported by user"),
+            reason_code=(body.reason_code if body else "other"),
+        )
     except SessionError as exc:
         return JSONResponse(err_body(exc.code, exc.message), status_code=exc.status)
 
@@ -663,12 +771,53 @@ async def session_finish(session_id: str, body: FinishRequest | None = None):
         return JSONResponse(err_body(exc.code, exc.message), status_code=exc.status)
 
 
+@app.get("/api/settings/preferences")
+async def get_preferences():
+    with db.connect() as conn:
+        rows = conn.execute("SELECT key, value_json FROM user_settings").fetchall()
+    prefs: dict = {"exam_target_date": None, "strict_psi_default": False, "allow_destructive_practice": False}
+    for r in rows:
+        try:
+            prefs[r["key"]] = json.loads(r["value_json"])
+        except (ValueError, TypeError):
+            prefs[r["key"]] = r["value_json"]
+    return prefs
+
+
+@app.put("/api/settings/preferences")
+async def update_preferences(body: PreferencesRequest):
+    now = time.time()
+    updates: dict = {}
+    if body.exam_target_date is not None:
+        updates["exam_target_date"] = body.exam_target_date.strip() or None
+    if body.strict_psi_default is not None:
+        updates["strict_psi_default"] = bool(body.strict_psi_default)
+    if body.allow_destructive_practice is not None:
+        updates["allow_destructive_practice"] = bool(body.allow_destructive_practice)
+    with db.connect() as conn:
+        for k, v in updates.items():
+            conn.execute(
+                "INSERT INTO user_settings (key, value_json, updated_at) VALUES (?, ?, ?)"
+                " ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at",
+                (k, json.dumps(v), now),
+            )
+    return await get_preferences()
+
+
 # ------------------------------------------------------------ terminals
 
 @app.post("/api/terminal/tabs", status_code=201)
 async def create_terminal_tab(body: TerminalTabRequest):
+    strict = body.strict_psi
+    if strict is None:
+        sid = sessions.active_session_id()
+        if sid:
+            with db.connect() as conn:
+                row = conn.execute("SELECT strict_psi, variant FROM sessions WHERE id = ?", (sid,)).fetchone()
+            if row:
+                strict = bool(row["strict_psi"]) or row["variant"] == "blind_exam"
     try:
-        session = terminals.create(body.preset, body.node)
+        session = terminals.create(body.preset, body.node, strict_psi=bool(strict))
     except TerminalError as exc:
         return JSONResponse(err_body("terminal_error", str(exc)), status_code=409)
     return session.info()

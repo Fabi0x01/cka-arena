@@ -437,7 +437,7 @@ NETWORK_TOPICS: tuple[StudyTopic, ...] = (
         subtitle="Route HTTP hosts/paths natively using the modern CKA 2025/2026 Gateway API (`gateway.networking.k8s.io/v1`).",
         estimated_minutes=6,
         exam_frequency="Critical",
-        archetype_ids=("sn-gateway-httproute",),
+        archetype_ids=("sn-gateway-httproute", "sn-gateway-tls-header-route"),
         summary=(
             "Gateway API separates cluster roles cleanly: Infrastructure defines `GatewayClass` -> `Gateway` listeners (`HTTP`/`HTTPS` + TLS `certificateRefs`), "
             "while application teams create `HTTPRoute` binding via `parentRefs` onto Gateway listeners and routing to `backendRefs`. "
@@ -881,7 +881,7 @@ NETWORK_TOPICS: tuple[StudyTopic, ...] = (
         subtitle="Master Kubernetes Ingress/Egress isolation without breaking CoreDNS or tripping over YAML dash syntax.",
         estimated_minutes=6,
         exam_frequency="Critical",
-        archetype_ids=("sn-networkpolicy-dns", "sn-networkpolicy-multi-ns"),
+        archetype_ids=("sn-networkpolicy-dns", "sn-networkpolicy-multi-ns", "sn-networkpolicy-egress-cidr"),
         summary=(
             "Pods accept all traffic until ANY `NetworkPolicy` selects them under `Ingress` or `Egress` (`policyTypes`). "
             "Policies are purely additive (never explicit Deny rules), `Ingress` and `Egress` evaluate independently, AND the single most "

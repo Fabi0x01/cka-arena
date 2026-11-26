@@ -8,7 +8,8 @@ CKA_DIR="${CKA_DIR:-$HOME/.cka-arena}"
 export PATH="$PATH:$HOME/.local/bin:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin"
 LOG="${CKA_SETUP_LOG:-$CKA_DIR/setup.log}"
 POD_CIDR="10.244.0.0/16"
-K8S_REPO="${K8S_REPO:-v1.31}"
+K8S_REPO="${K8S_REPO:-v1.34}"
+ETCD_VER="${ETCD_VER:-v3.5.17}"
 WEAVE_YAML="${WEAVE_YAML:-https://github.com/weaveworks/weave/releases/download/v2.8.1/weave-daemonset-k8s.yaml}"
 CALICO_YAML="${CALICO_YAML:-https://raw.githubusercontent.com/projectcalico/calico/v3.28.2/manifests/calico.yaml}"
 
@@ -94,6 +95,11 @@ runcmd:
   - apt-mark hold kubelet kubeadm kubectl
   - swapoff -a
   - sed -ri '/\sswap\s/s/^#?/#/' /etc/fstab
+  - |
+    if ! command -v etcdutl >/dev/null 2>&1; then
+      ARCH=$(uname -m); [ "$ARCH" = "aarch64" ] && E_ARCH="arm64" || E_ARCH="amd64"
+      curl -fsSL "https://github.com/etcd-io/etcd/releases/download/${ETCD_VER}/etcd-${ETCD_VER}-linux-${E_ARCH}.tar.gz" -o /tmp/etcd.tgz && tar -xzf /tmp/etcd.tgz -C /tmp && install -m 0755 "/tmp/etcd-${ETCD_VER}-linux-${E_ARCH}/etcdutl" /usr/local/bin/etcdutl && rm -rf /tmp/etcd.tgz "/tmp/etcd-${ETCD_VER}-linux-${E_ARCH}" || true
+    fi
   - touch /var/lib/cloud/instance/boot-finished
 EOF
 }

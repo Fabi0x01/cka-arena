@@ -11,7 +11,7 @@
   "difficulty": "exam_standard",
   "weight": 4,
   "estimated_minutes": 4,
-  "prompt": "Service `web-svc` in namespace `cka-sn-selector` has no Endpoints: its selector does not match the Pods of Deployment `web` (labels `app=web`).\n\nPerform the following tasks:\n1. Fix Service `web-svc` so it routes traffic to the Pods of Deployment `web`.\n2. Do not modify the Deployment or its Pod labels.",
+  "prompt": "Service `web-svc` in namespace `cka-sn-selector` has zero ready endpoints and returns connection refused when queried.\n\nPerform the following tasks:\n1. Fix Service `web-svc` so it routes traffic to the Pods of Deployment `web` (labels `app=web`).\n2. Do not modify Deployment `web` or its Pod labels.",
   "copy_tokens": [
     "web-svc",
     "cka-sn-selector",
@@ -43,7 +43,8 @@
         "name": "web-svc",
         "namespace": "cka-sn-selector"
       },
-      "failure_hint": "The Service exists \u2014 fix its selector."
+      "failure_hint": "The Service exists \u2014 fix its selector.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-endpoints",
@@ -57,7 +58,8 @@
         "operator": "len_gte",
         "expected": 1
       },
-      "failure_hint": "No endpoints: the selector does not match the Pod labels app=web."
+      "failure_hint": "No endpoints: the selector does not match the Pod labels app=web.",
+      "weight_ratio": 1.0
     },
     {
       "id": "chk-http",
@@ -79,7 +81,8 @@
         ],
         "stdout_contains": "200"
       },
-      "failure_hint": "Traffic does not reach the Pods \u2014 check the Service selector."
+      "failure_hint": "Traffic does not reach the Pods \u2014 check the Service selector.",
+      "weight_ratio": 1.0
     }
   ],
   "solution": {
