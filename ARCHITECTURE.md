@@ -1,315 +1,315 @@
-# Arquitetura Técnica — CKA Arena
+# Technical Architecture — CKA Arena
 
-Este documento detalha os componentes do sistema, o fluxo de dados entre o navegador, o backend local, a LLM, a API do Kubernetes e os nós do laboratório (VMs Multipass ou containers kind), além do modelo de dados e da estratégia de rollback seguro.
+This document details the system components, the data flow between the browser, the local backend, the LLM, the Kubernetes API, and the lab nodes (Multipass VMs or kind containers), plus the data model and the safe rollback strategy.
 
-> **Documento de referência** do código na `main`. Onde o texto divergir do código, o código prevalece. Versões de software, endereços IP e contagens citados como evidência de ambiente são exemplos do laboratório de referência — tudo é descoberto em runtime.
+> **Reference document** for the code on `main`. Where the text diverges from the code, the code prevails. Software versions, IP addresses and counts cited as environment evidence are examples from the reference lab — everything is discovered at runtime.
 
 ---
 
-## 1. Visão Geral da Arquitetura
+## 1. Architecture Overview
 
-O **CKA Arena** funciona como um **orquestrador local de estado, validação e acesso**: o navegador concentra o enunciado, o Check, o Estúdio IA **e o próprio terminal** (PTY real do host renderizado em xterm.js), além de gerenciar o ciclo de vida do laboratório (ligar/desligar/reparar). O terminal nativo do sistema operacional permanece como modo opcional para quem prefere dual-window.
+**CKA Arena** works as a **local orchestrator of state, validation and access**: the browser concentrates the question prompt, the Check, the AI Studio **and the terminal itself** (real host PTY rendered in xterm.js), and manages the lab lifecycle (power on/off/repair). The operating system's native terminal remains an optional mode for those who prefer dual-window.
 
 ```mermaid
 flowchart LR
-    subgraph BR["Browser — janela única (127.0.0.1:8765)"]
+    subgraph BR["Browser — single window (127.0.0.1:8765)"]
         UI["Exam Workspace + Scenario Studio"]
-        XT["Terminal Integrado (xterm.js)\nabas: shell local · controlplane · node01 · node02"]
+        XT["Integrated Terminal (xterm.js)\ntabs: local shell · controlplane · node01 · node02"]
     end
     UI <-->|HTTP / SSE| B["FastAPI Backend\nTerminalService · PowerManager · ScenarioEngine"]
     XT <-->|"WebSocket /ws/terminal/{tab}"| B
-    B <-->|SQLite WAL| DB[("cka_arena.db\nSessões, Cenários, Métricas")]
-    B -->|Prompt + Topologia| LLM["Provedor LLM\nGLM / DeepSeek / Claude / Ollama"]
-    B -->|"kubectl --context cka\n(kubeconfig dedicado)"| K8sAPI["Kubernetes API\n(cluster kubeadm)"]
-    B -->|"transporte do provider\n(chave ~/.cka-arena ou docker exec)"| Nodes["Nós do laboratório\nMultipass (VMs) · kind (containers)\ncontrolplane · node01 · node02"]
-    B -->|"start / stop / list"| MPX["Provider de nós\nMultipass Daemon · Docker"]
-    TN["Terminal Nativo\n(modo opcional)"] -->|kubectl · vim · helm · ssh| K8sAPI
+    B <-->|SQLite WAL| DB[("cka_arena.db\nSessions, Scenarios, Metrics")]
+    B -->|Prompt + Topology| LLM["LLM Provider\nGLM / DeepSeek / Claude / Ollama"]
+    B -->|"kubectl --context cka\n(dedicated kubeconfig)"| K8sAPI["Kubernetes API\n(kubeadm cluster)"]
+    B -->|"provider transport\n(key ~/.cka-arena or docker exec)"| Nodes["Lab nodes\nMultipass (VMs) · kind (containers)\ncontrolplane · node01 · node02"]
+    B -->|"start / stop / list"| MPX["Node provider\nMultipass Daemon · Docker"]
+    TN["Native Terminal\n(optional mode)"] -->|kubectl · vim · helm · ssh| K8sAPI
     TN -->|ssh cka-node01| Nodes
 ```
 
 ---
 
-## 2. Fluxo Completo do Ciclo de Vida de um Cenário
+## 2. Full Lifecycle Flow of a Scenario
 
 ```mermaid
 sequenceDiagram
-    actor U as Usuário (Browser + Terminal)
-    participant B as Backend FastAPI
+    actor U as User (Browser + Terminal)
+    participant B as FastAPI Backend
     participant L as LLM Provider
-    participant K as Cluster K8s + Nós (SSH)
+    participant K as K8s Cluster + Nodes (SSH)
 
-    U->>B: Studio: domínios + dificuldade + qtd → clica "Gerar com IA"
-    B->>K: Coleta topologia leve (versão, nós, StorageClasses, CRDs, addons)
-    B->>L: "[A] Normalizador" — pedido → GenerationRequest (contrato JSON, flash)
-    B->>L: "[B] Construtor" — ScenarioEnvelope + bloco solution (1 por chamada)
-    B->>L: "[C] Revisor" — rubrica de qualidade (flash) → approve/patch
-    B->>B: "[D] Gates determinísticos" — Pydantic + YAML + blocklist + dry-run
-    B->>K: "[E] Prove-out" em namespace de prova: sanity (checks DEVEM falhar) + Solvability Probe (solution → checks DEVEM passar)
-    alt Algum gate falhou
-        B->>L: Erro exato volta ao Construtor (≤ 2 retries)
+    U->>B: Studio: domains + difficulty + count → clicks "Gerar com IA"
+    B->>K: Collects light topology (version, nodes, StorageClasses, CRDs, addons)
+    B->>L: "[A] Normalizer" — request → GenerationRequest (JSON contract, flash)
+    B->>L: "[B] Builder" — ScenarioEnvelope + solution block (1 per call)
+    B->>L: "[C] Reviewer" — quality rubric (flash) → approve/patch
+    B->>B: "[D] Deterministic gates" — Pydantic + YAML + blocklist + dry-run
+    B->>K: "[E] Prove-out" in a probe namespace: sanity (checks MUST fail) + Solvability Probe (solution → checks MUST pass)
+    alt Any gate failed
+        B->>L: Exact error goes back to the Builder (≤ 2 retries)
     end
-    B->>B: Publica no banco de questões (`bank_questions: published`)
-    Note over U,B: Fluxo separado — "Practice": sorteio por percentuais da prova (largest remainder)
-    U->>B: Practice (N questões) → draw_exam_sample → session_items
-    B->>K: Backup de nós + Setup da Q1 no cluster real
-    B-->>U: Exibe Questão 1 (Next bloqueado 🔒)
+    B->>B: Publishes to the question bank (`bank_questions: published`)
+    Note over U,B: Separate flow — "Practice": exam-weight draw (largest remainder)
+    U->>B: Practice (N questions) → draw_exam_sample → session_items
+    B->>K: Node backup + Q1 setup on the real cluster
+    B-->>U: Shows Question 1 (Next locked 🔒)
 
-    Note over U,K: Usuário lê enunciado no browser e resolve no Terminal Integrado (PTY no browser — ou terminal nativo, no modo opcional)
+    Note over U,K: User reads the prompt in the browser and solves it in the Integrated Terminal (PTY in the browser — or native terminal, in the optional mode)
 
-    U->>B: Clica em "Check" (ou ⌘+Enter)
-    B->>K: Executa todos os Checks atômicos no Cluster / Nós
-    alt Algum check falhou
-        B-->>U: Exibe lista PASS/FAIL + diagnóstico técnico (Next continua 🔒)
+    U->>B: Clicks "Check" (or ⌘+Enter)
+    B->>K: Runs all atomic Checks on the Cluster / Nodes
+    alt Any check failed
+        B-->>U: Shows PASS/FAIL list + technical diagnosis (Next stays locked 🔒)
     else 100% PASS
-        B-->>U: Marca Questão como Concluída ✅ + Libera botão "Next" 🔓
-        U->>B: Clica em "Next"
-        B->>K: Executa Cleanup da Q1 + Setup da Q2
-        B-->>U: Carrega Questão 2
+        B-->>U: Marks Question as Completed ✅ + Enables the "Next" button 🔓
+        U->>B: Clicks "Next"
+        B->>K: Runs Q1 Cleanup + Q2 Setup
+        B-->>U: Loads Question 2
     end
 ```
 
 ---
 
-## 3. Ponte de Acesso ao Cluster (`ClusterBridge & SSH Runner`)
+## 3. Cluster Access Bridge (`ClusterBridge & SSH Runner`)
 
-### Problema Real do Laboratório Multipass
-O provisionamento Multipass (`scripts/cluster/up.sh`) cria 3 VMs (`controlplane`, `node01`, `node02`) com **duas interfaces de rede**:
-- Rede NAT do Multipass: usada internamente por `multipass exec`, que apresenta falhas intermitentes (`ssh connection failed: 'Failed to connect: No route to host'`).
-- Rede **Bridged** (IPs na subnet da sua rede local, atribuídos por DHCP): acessível diretamente pelo host com baixa latência, com `PasswordAuthentication yes` + usuário `ubuntu` configurados pelo cloud-init.
+### The Real Multipass Lab Problem
+Multipass provisioning (`scripts/cluster/up.sh`) creates 3 VMs (`controlplane`, `node01`, `node02`) with **two network interfaces**:
+- Multipass NAT network: used internally by `multipass exec`, which presents intermittent failures (`ssh connection failed: 'Failed to connect: No route to host'`).
+- **Bridged** network (IPs on your local network's subnet, assigned via DHCP): directly reachable from the host with low latency, with `PasswordAuthentication yes` + user `ubuntu` configured by cloud-init.
 
-### Solução Arquitetural
-1. **Descoberta Dinâmica de IPs:**
-   - O backend executa `kubectl --context cka get nodes -o json` e lê `.status.addresses[type=="InternalIP"].address` de cada nó (`controlplane`, `node01`, `node02`).
-   - Como os nós são iniciados com `--node-ip ${PRIMARY_IP}` (IP Bridged), o `InternalIP` retornado pelo `kubectl` é o IP da rede Bridged de cada nó.
-2. **Provisionamento de Chave SSH Dedicada (`~/.cka-arena/id_ed25519`):**
-   - Na inicialização (ou via botão *Configurar Acesso SSH* no Cluster Doctor), a plataforma gera um par `ed25519` em `~/.cka-arena/` (sem passphrase) e copia a chave pública para `~/.ssh/authorized_keys` do usuário `ubuntu` nos 3 nós via IP Bridged.
-   - Adiciona um bloco isolado no `~/.ssh/config` do host (IPs reescritos a cada boot):
+### Architectural Solution
+1. **Dynamic IP Discovery:**
+   - The backend runs `kubectl --context cka get nodes -o json` and reads `.status.addresses[type=="InternalIP"].address` from each node (`controlplane`, `node01`, `node02`).
+   - Since nodes are started with `--node-ip ${PRIMARY_IP}` (Bridged IP), the `InternalIP` returned by `kubectl` is each node's Bridged network IP.
+2. **Dedicated SSH Key Provisioning (`~/.cka-arena/id_ed25519`):**
+   - At startup (or via the *Configure SSH Access* button in the Cluster Doctor), the platform generates an `ed25519` keypair in `~/.cka-arena/` (no passphrase) and copies the public key to the `ubuntu` user's `~/.ssh/authorized_keys` on the 3 nodes via the Bridged IP.
+   - Adds an isolated block to the host's `~/.ssh/config` (IPs rewritten on every boot):
      ```sshconfig
      # >>> CKA-ARENA MANAGED START >>>
      Host cka-controlplane controlplane
-       HostName <ip-do-controlplane>
+       HostName <controlplane-ip>
        User ubuntu
        IdentityFile ~/.cka-arena/id_ed25519
        StrictHostKeyChecking accept-new
 
      Host cka-node01 node01
-       HostName <ip-do-node01>
+       HostName <node01-ip>
        User ubuntu
        IdentityFile ~/.cka-arena/id_ed25519
        StrictHostKeyChecking accept-new
 
      Host cka-node02 node02
-       HostName <ip-do-node02>
+       HostName <node02-ip>
        User ubuntu
        IdentityFile ~/.cka-arena/id_ed25519
        StrictHostKeyChecking accept-new
      # <<< CKA-ARENA MANAGED END <<<
      ```
-   - **Benefício duplo:** o backend consegue quebrar/inspecionar `kubelet`, `/etc/kubernetes/manifests` e `etcd` instantaneamente via SSH, e você pode digitar `ssh controlplane` ou `ssh node01` direto no seu terminal sem precisar de `multipass shell`!
-3. **Execução SSH Persistente (`ControlMaster`):**
-   - O cliente OpenSSH roda com `ControlMaster=auto` + `ControlPersist=120` (socket em `~/.cka-arena/ssh-mux-*`), `ConnectTimeout=4` e timeout de execução de `20s` (`app/config.py`), evitando travamentos caso um nó seja propositalmente parado em um cenário.
-4. **Kubeconfig dedicado (`~/.cka-arena/kubeconfig`):**
-   - Copiado do `/etc/kubernetes/admin.conf` do controlplane no primeiro provisionamento (via SSH) e usado por **todo** `kubectl` do backend com `--kubeconfig ~/.cka-arena/kubeconfig --context cka`.
-   - Motivo: o `~/.kube/config` global do usuário costuma acumular outros contextos (trabalho, outros clusters) e tem um `current-context` volátil — o backend nunca deve depender dele (nem executar comandos contra o cluster errado).
-5. **Bootstrap da chave sem `sshpass` + IPs Dinâmicos:**
-   - `sshpass` não existe no macOS; o primeiro provisionamento usa **`SSH_ASKPASS` com `SSH_ASKPASS_REQUIRE=force`** (OpenSSH ≥ 8.4) para instalar `~/.cka-arena/id_ed25519.pub` em `~/.ssh/authorized_keys` dos 3 nós (mkdir/chmod + append idempotente via `grep -qxF`), com a senha do lab (`ubuntu`, env `CKA_LAB_PASSWORD`). Sem expect: o askpass é determinístico e não depende de casar prompts de TTY.
-   - Os IPs Bridged vêm de **DHCP**: com o cluster ligado, a fonte primária é `kubectl get nodes -o json` (`InternalIP`); com o cluster desligado ou bootando, a fonte é `multipass list --format json`. A cada boot, o `ClusterPowerManager` **regenera o bloco gerenciado** do `~/.ssh/config` com os IPs atuais (§9.3).
+   - **Double benefit:** the backend can break/inspect `kubelet`, `/etc/kubernetes/manifests` and `etcd` instantly via SSH, and you can type `ssh controlplane` or `ssh node01` directly in your terminal without needing `multipass shell`!
+3. **Persistent SSH Execution (`ControlMaster`):**
+   - The OpenSSH client runs with `ControlMaster=auto` + `ControlPersist=120` (socket in `~/.cka-arena/ssh-mux-*`), `ConnectTimeout=4`, and an execution timeout of `20s` (`app/config.py`), avoiding hangs when a node is intentionally stopped in a scenario.
+4. **Dedicated kubeconfig (`~/.cka-arena/kubeconfig`):**
+   - Copied from the controlplane's `/etc/kubernetes/admin.conf` at first provisioning (via SSH) and used by **every** backend `kubectl` with `--kubeconfig ~/.cka-arena/kubeconfig --context cka`.
+   - Reason: the user's global `~/.kube/config` tends to accumulate other contexts (work, other clusters) and has a volatile `current-context` — the backend must never depend on it (nor run commands against the wrong cluster).
+5. **Key bootstrap without `sshpass` + Dynamic IPs:**
+   - `sshpass` does not exist on macOS; the first provisioning uses **`SSH_ASKPASS` with `SSH_ASKPASS_REQUIRE=force`** (OpenSSH ≥ 8.4) to install `~/.cka-arena/id_ed25519.pub` into the `~/.ssh/authorized_keys` of the 3 nodes (mkdir/chmod + idempotent append via `grep -qxF`), with the lab password (`ubuntu`, env `CKA_LAB_PASSWORD`). No expect: the askpass is deterministic and does not depend on matching TTY prompts.
+   - Bridged IPs come from **DHCP**: with the cluster powered on, the primary source is `kubectl get nodes -o json` (`InternalIP`); with the cluster off or booting, the source is `multipass list --format json`. On every boot, the `ClusterPowerManager` **regenerates the managed block** in `~/.ssh/config` with the current IPs (§9.3).
 
 ---
 
-## 4. Segurança, Isolamento e Auto-Cura (`Safety & Rollback Engine`)
+## 4. Safety, Isolation and Self-Healing (`Safety & Rollback Engine`)
 
-Cenários de CKA de nível **Troubleshooting (30%)** frequentemente modificam arquivos críticos do Control Plane (`/etc/kubernetes/manifests/kube-apiserver.yaml`, `/var/lib/kubelet/config.yaml`, `systemctl stop kubelet`). Se algo der errado na aplicação ou se o usuário quiser desistir, o cluster não pode ficar quebrado.
+**Troubleshooting (30%)**-level CKA scenarios often modify Control Plane critical files (`/etc/kubernetes/manifests/kube-apiserver.yaml`, `/var/lib/kubelet/config.yaml`, `systemctl stop kubelet`). If something goes wrong during application, or the user gives up, the cluster cannot be left broken.
 
-### Mecanismo em 3 Camadas
+### 3-Layer Mechanism
 
-1. **Snapshot Baseline Global (Bootstrap):**
-   - Ao rodar o `ClusterDoctor` pela primeira vez (com o cluster saudável), é tirado um snapshot imutável dentro de cada nó em `/var/backups/cka-arena/baseline/`:
+1. **Global Baseline Snapshot (Bootstrap):**
+   - The first time `ClusterDoctor` runs (with a healthy cluster), an immutable snapshot is taken inside each node at `/var/backups/cka-arena/baseline/`:
      - `/etc/kubernetes/manifests/*`
      - `/etc/systemd/system/kubelet.service.d/*`
      - `/var/lib/kubelet/config.yaml`
      - `/etc/containerd/config.toml`
-2. **Snapshot Pré-Cenário (`backup_paths`):**
-   - Todo comando de nó listado em `setup.node_commands` deve declarar `backup_paths` (e o parser rejeita comandos que alterem `/etc/kubernetes`, `/var/lib/kubelet` ou `/etc/systemd` sem `backup_paths` declarado).
-   - Antes de executar o comando de quebra, o backend executa via SSH:
+2. **Pre-Scenario Snapshot (`backup_paths`):**
+   - Every node command listed in `setup.node_commands` must declare `backup_paths` (and the parser rejects commands that modify `/etc/kubernetes`, `/var/lib/kubelet` or `/etc/systemd` without a declared `backup_paths`).
+   - Before running the break command, the backend runs via SSH:
      `sudo mkdir -p /var/backups/cka-arena/<scenario_id> && sudo cp -a <path> /var/backups/cka-arena/<scenario_id>/`
-3. **Guardrails de Destruição (Blocklist na Camada de Parser):**
-   - O `ScenarioValidator` bloqueia **antes da execução** qualquer manifesto ou comando gerado pela LLM que contenha padrões destrutivos fora de escopo:
-     - `rm -rf /`, `mkfs`, `dd if=`, `kubeadm reset`, `iptables -F` global sem restauração, deleção de `kube-system` inteiro ou remoção de `/etc/kubernetes/pki`.
-     - Namespaces protegidos: `kube-system`, `kube-public`, `kube-node-lease`, `default` nunca podem receber `kubectl delete namespace`.
-   - **Política de labels (única, aplicada pelo `apply_setup` a todo recurso criado):** `cka-arena.io/managed: "true"` (global — alimenta a varredura L1 do teardown) **e** `cka-arena.io/scenario: "<question_id>"` (por questão — habilita o cleanup cirúrgico L0); sondas efêmeras usam `cka-arena.io/probe: "true"` (TTL 120s) e o warm probe pod carrega `cka-arena.io/warm-probe: "true"`. Nenhum outro rótulo de gerenciamento existe.
-4. **Botão de Emergência ("Cluster Doctor · Restore Baseline"):**
-   - Caso a API do Kubernetes (`6443`) esteja fora do ar (ex.: durante um cenário de `kube-apiserver` quebrado) e o usuário clique em *Reset* ou *Restore Cluster*, o backend usa **o transporte do provider direto no nó** (SSH no Multipass, que não depende do `kube-apiserver`; `docker exec` no kind) para restaurar os arquivos de `/var/backups/cka-arena/<id>/` ou `/var/backups/cka-arena/baseline/` e reiniciar `kubelet`/`containerd`.
+3. **Destruction Guardrails (Parser-Layer Blocklist):**
+   - The `ScenarioValidator` blocks **before execution** any LLM-generated manifest or command containing out-of-scope destructive patterns:
+     - `rm -rf /`, `mkfs`, `dd if=`, `kubeadm reset`, global `iptables -F` without restore, deletion of the entire `kube-system`, or removal of `/etc/kubernetes/pki`.
+     - Protected namespaces: `kube-system`, `kube-public`, `kube-node-lease`, `default` can never receive `kubectl delete namespace`.
+   - **Label policy (single, applied by `apply_setup` to every created resource):** `cka-arena.io/managed: "true"` (global — feeds the L1 teardown sweep) **and** `cka-arena.io/scenario: "<question_id>"` (per question — enables surgical L0 cleanup); ephemeral probes use `cka-arena.io/probe: "true"` (TTL 120s) and the warm probe pod carries `cka-arena.io/warm-probe: "true"`. No other management label exists.
+4. **Emergency Button ("Cluster Doctor · Restore Baseline"):**
+   - If the Kubernetes API (`6443`) is down (e.g., during a broken `kube-apiserver` scenario) and the user clicks *Reset* or *Restore Cluster*, the backend uses **the provider transport directly on the node** (SSH on Multipass, which does not depend on the `kube-apiserver`; `docker exec` on kind) to restore the files from `/var/backups/cka-arena/<id>/` or `/var/backups/cka-arena/baseline/` and restart `kubelet`/`containerd`.
 
 ---
 
-## 5. Estrutura de Diretórios
+## 5. Directory Structure
 
 ```text
 cka-arena/
-├── setup.sh                     # Setup universal: detecta o S.O., audita pré-requisitos, provisiona o laboratório e sobe o servidor
-├── pyproject.toml               # Dependências Python (uv) e entrypoint `cka-arena`
-├── llm_config.example.json      # Exemplo de config do provider LLM (o arquivo real fica em llm_config.json, git-ignored)
-├── README.md                    # Visão geral e quickstart
-├── ARCHITECTURE.md              # Este documento
-├── PRODUCT.md                   # Verdade de produto
-├── DESIGN.md                    # Design system "Orbital Control Console"
-├── UX_UI_SPEC.md                # Especificação de UX/UI
-├── LLM_SCENARIO_SPEC.md         # Contrato JSON, catálogo de checks e regras do prompt
-├── LLM_PIPELINE_SPEC.md         # Pipeline de geração, banco de questões, contrato do Check e teardown
-├── PLAN.md · GAP_ANALYSIS.md · IMPLEMENTATION_READINESS.md      # Registros históricos do planejamento
-├── SETUP_PLAN.md · IMPROVEMENT_PLAN.md · ARCHITECTURE_V3_PLAN.md # Registros históricos de auditorias e upgrades
+├── setup.sh                     # Universal setup: detects the OS, audits prerequisites, provisions the lab, and starts the server
+├── pyproject.toml               # Python dependencies (uv) and `cka-arena` entrypoint
+├── llm_config.example.json      # Example LLM provider config (the real file lives in llm_config.json, git-ignored)
+├── README.md                    # Overview and quickstart
+├── ARCHITECTURE.md              # This document
+├── PRODUCT.md                   # Product truth
+├── DESIGN.md                    # "Orbital Control Console" design system
+├── UX_UI_SPEC.md                # UX/UI specification
+├── LLM_SCENARIO_SPEC.md         # JSON contract, check catalog, and prompt rules
+├── LLM_PIPELINE_SPEC.md         # Generation pipeline, question bank, Check contract, and teardown
+├── PLAN.md · GAP_ANALYSIS.md · IMPLEMENTATION_READINESS.md      # Historical planning records
+├── SETUP_PLAN.md · IMPROVEMENT_PLAN.md · ARCHITECTURE_V3_PLAN.md # Historical audit and upgrade records
 ├── scripts/
-│   ├── lib/                     # ui.sh, detect.sh, pkg.sh, state.sh (uso do setup: `./setup.sh --help`)
+│   ├── lib/                     # ui.sh, detect.sh, pkg.sh, state.sh (setup usage: `./setup.sh --help`)
 │   └── cluster/                 # up.sh (Multipass) · kind-up.sh (kind)
-├── scenarios/seed/              # Cenários curados (JSON) + assets/ (chart Helm, overlay Kustomize)
-├── backups/                     # Snapshot SQLite portável + manifest.json (restaurado no primeiro start)
-├── design/                      # Mockup do workspace
+├── scenarios/seed/              # Curated scenarios (JSON) + assets/ (Helm chart, Kustomize overlay)
+├── backups/                     # Portable SQLite snapshot + manifest.json (restored on first start)
+├── design/                      # Workspace mockup
 ├── app/
-│   ├── main.py                  # FastAPI: rotas REST + SSE, terminal PTY, backup, preferências
-│   ├── config.py                # Paths, variáveis de ambiente `CKA_*` e defaults de comportamento
-│   ├── db.py                    # Schema SQLite (WAL), migrações idempotentes e auto-restore do snapshot
-│   ├── models.py                # Modelos Pydantic: ScenarioEnvelope, CheckSpec, CHECK_TYPES, DOMAINS
-│   ├── cluster.py               # Wrapper kubectl (sempre com o kubeconfig dedicado)
-│   ├── commands.py              # Dispatcher kubectl/helm para setup, solution e cleanup
+│   ├── main.py                  # FastAPI: REST + SSE routes, PTY terminal, backup, preferences
+│   ├── config.py                # Paths, `CKA_*` env vars, and behavior defaults
+│   ├── db.py                    # SQLite schema (WAL), idempotent migrations, and snapshot auto-restore
+│   ├── models.py                # Pydantic models: ScenarioEnvelope, CheckSpec, CHECK_TYPES, DOMAINS
+│   ├── cluster.py               # kubectl wrapper (always with the dedicated kubeconfig)
+│   ├── commands.py              # kubectl/helm dispatcher for setup, solution, and cleanup
 │   ├── scenario_engine.py       # apply_setup → smart settle → run_checks → digest → cleanup
-│   ├── validator.py             # Motor determinístico dos checks (PASS/FAIL/SKIP/ERROR)
+│   ├── validator.py             # Deterministic check engine (PASS/FAIL/SKIP/ERROR)
 │   ├── provider/                # base.py (interface) · multipass.py (VMs) · kind.py (containers)
-│   ├── ssh_runner.py            # Chave SSH dedicada, bloco gerenciado do ssh/config, kubeconfig dedicado
-│   ├── setup_wire.py            # Bridge SSH + kubeconfig para laboratórios Multipass e kind
-│   ├── power.py                 # ClusterPowerManager: estados, boot instrumentado, self-heal
-│   ├── doctor.py                # ClusterDoctor: saúde, addons, baseline de arquivos
-│   ├── addons.py                # Instalação idempotente de addons (+ CLI `python -m app.addons`)
-│   ├── teardown.py              # Teardown L0/L1/L2 (provider-agnóstico) + drift check
-│   ├── terminal.py              # TerminalService: PTY, exam shell isolado, WebSocket, registro de comandos
-│   ├── cluster_lease.py         # ClusterLease: exclusão mútua entre prática, geração, reset e power
-│   ├── sessions.py              # Sessões: estudo, drills, simulados, hints, post-mortem, crédito parcial
-│   ├── bank.py                  # Banco: dedup, amostragem, telemetria e curadoria (+ CLI `python -m app.bank`)
-│   ├── curriculum.py            # Currículo CKA: arquétipos + blueprints de incidentes causais
-│   ├── planner.py               # Slot Planner: cobertura do currículo e anti-duplicação por slot
-│   ├── llm_client.py            # Adaptador multi-provider (Anthropic, OpenAI-compatible, Ollama)
-│   ├── pipeline/                # prompts.py · gates.py · prober.py · orchestrator.py (+ CLI de benchmark)
-│   ├── mastery.py               # Repetição espaçada, relatório de prontidão, plano diário e Speed Coach
-│   ├── study/                   # Study Codex: conteúdo por domínio, modelos e serviço (XP, quizzes, drills)
-│   ├── telemetry.py             # Telemetria por domínio + saúde do pipeline
-│   ├── events.py                # Broker SSE em memória
-│   ├── backup.py                # Snapshot portável (create / restore / status; sem chaves de IA)
+│   ├── ssh_runner.py            # Dedicated SSH key, managed ssh/config block, dedicated kubeconfig
+│   ├── setup_wire.py            # SSH + kubeconfig bridge for Multipass and kind labs
+│   ├── power.py                 # ClusterPowerManager: states, instrumented boot, self-heal
+│   ├── doctor.py                # ClusterDoctor: health, addons, file baseline
+│   ├── addons.py                # Idempotent addon installation (+ CLI `python -m app.addons`)
+│   ├── teardown.py              # L0/L1/L2 teardown (provider-agnostic) + drift check
+│   ├── terminal.py              # TerminalService: PTY, isolated exam shell, WebSocket, command logging
+│   ├── cluster_lease.py         # ClusterLease: mutual exclusion between practice, generation, reset, and power
+│   ├── sessions.py              # Sessions: study, drills, mock exams, hints, post-mortem, partial credit
+│   ├── bank.py                  # Bank: dedup, sampling, telemetry, and curation (+ CLI `python -m app.bank`)
+│   ├── curriculum.py            # CKA curriculum: archetypes + causal incident blueprints
+│   ├── planner.py               # Slot Planner: curriculum coverage and per-slot anti-duplication
+│   ├── llm_client.py            # Multi-provider adapter (Anthropic, OpenAI-compatible, Ollama)
+│   ├── pipeline/                # prompts.py · gates.py · prober.py · orchestrator.py (+ benchmark CLI)
+│   ├── mastery.py               # Spaced repetition, readiness report, daily plan, and Speed Coach
+│   ├── study/                   # Study Codex: per-domain content, models, and service (XP, quizzes, drills)
+│   ├── telemetry.py             # Per-domain telemetry + pipeline health
+│   ├── events.py                # In-memory SSE broker
+│   ├── backup.py                # Portable snapshot (create / restore / status; no AI keys)
 │   └── seed.py                  # CLI `python -m app.seed [validate [ids] [--gates-only]]`
 ├── static/
-│   ├── index.html               # Shell único: rail, topbar e views
+│   ├── index.html               # Single shell: rail, topbar, and views
 │   ├── css/                     # tokens · base · layout · components · views
 │   ├── js/                      # app · api · ui · icons · markdown · palette · power · workspace · terminal · studio · readiness · study · review · settings
-│   └── vendor/xterm/            # xterm.js + addon-fit (vendored, sem CDN)
-└── tests/                       # pytest: testes unitários e de API (LLM e cluster stubados)
+│   └── vendor/xterm/            # xterm.js + addon-fit (vendored, no CDN)
+└── tests/                       # pytest: unit and API tests (LLM and cluster stubbed)
 ```
 
 ---
 
-## 6. Esquema de Banco de Dados (`SQLite`)
+## 6. Database Schema (`SQLite`)
 
-O estado local é persistido em `data/cka_arena.db` (modo `WAL`) para preservar seu histórico entre reinícios do servidor ou das VMs:
+Local state is persisted in `data/cka_arena.db` (`WAL` mode) to preserve your history across server or VM restarts:
 
-| Tabela | Colunas Principais | Propósito |
+| Table | Main Columns | Purpose |
 | :--- | :--- | :--- |
-| `sessions` | `id`, `title`, `mode` (`study` \| `mock_exam`), `variant` (`study`, `weakness_drill`, `speed_blitz`, `mistake_replay`, `guided_mock`, `blind_exam`), `strict_psi`, `difficulty_filter`, `domains_json`, `sample_json`, `status`, `started_at`, `finished_at`, `total_weight`, `earned_weight`, `earned_weight_exact`, `time_limit_minutes` | Sessão de prática **sorteada do banco** (`sample_json` guarda a distribuição efetiva por domínio). |
-| `bank_questions` | `id`, `envelope_json`, `envelope_hash`, `title`, `domain`, `subtopics_json`, `difficulty`, `weight_pct`, `estimated_minutes`, `source` (`llm`\|`seed`), `state` (`draft`\|`probed`\|`published`\|`retired`), `archetype_id`, `fingerprint`, `probe_result_json`, `quality_score`, `quality_report_json`, `times_used`, `last_used_at`, `first_try_pass_count`, `avg_solve_seconds`, `generator_meta_json`, `supersedes_question_id`, `retired_reason`, `created_at` | **Banco de questões**: envelope imutável após publicado (correção = nova versão), dedup por `envelope_hash` semântico, métricas de qualidade por questão (`LLM_PIPELINE_SPEC.md` §3). |
-| `session_items` | `id`, `session_id`, `bank_question_id`, `order_index`, `state` (`pending`\|`active`\|`passed`\|`skipped`), `started_at`, `passed_at`, `attempts`, `flagged`, `mounted_at`, `earned_weight`, `check_pass_ratio`, `notes_text`, `checked_tasks_json`, `hints_used`, `context_name`, `active_seconds`, `last_check_json` | Fila da sessão referenciando o banco. `Next` liberado quando `state == 'passed'` (ou `skipped` após desistência); guarda notepad, checklist, flags e crédito parcial por item. |
-| `generation_requests` | `id`, `request_json`, `status`, `scenarios_attempted`, `scenarios_published`, `created_at` | Auditoria do pipeline: o que foi pedido × o que sobreviveu aos gates A–E. |
-| `check_runs` | `id`, `session_item_id`, `ran_at`, `all_passed`, `duration_ms`, `results_json` | Cada clique em **Check** com status por item (`PASS`/`FAIL`/`SKIP`/`ERROR` — contrato em `LLM_PIPELINE_SPEC.md` §5). |
-| `llm_generations` | `id`, `created_at`, `stage`, `job_id`, `provider`, `model`, `prompt_params_json`, `attempts_used`, `raw_response`, `status`, `error_message`, `duration_ms`, `prompt_tokens`, `completion_tokens`, `reasoning_tokens` | Auditoria por estágio do pipeline (permite diagnosticar prompts que geraram YAML inválido e medir custo/latência). Excluída dos snapshots portáveis. |
-| `terminal_sessions` | `id`, `tab_id`, `preset` (`host` \| `node`), `node_name`, `session_item_id` (nullable), `created_at`, `last_activity`, `closed_at`, `exit_status` | Reservada: hoje não é populada — o registro das abas de terminal vive em memória no `TerminalRegistry` e não sobrevive ao restart do backend. |
-| `command_audit` | `id`, `session_id`, `session_item_id`, `command_text`, `ran_at` | Comandos digitados nas abas de shell local durante uma sessão (registro sempre ativo, com filtro de segredos) — insumo do Post-Mortem / Speed Coach (§8.4). Só local; excluída dos snapshots portáveis. |
-| `archetype_mastery` | `archetype_id`, `domain`, `attempts`, `passes`, `first_try_passes`, `ewma_solve_ratio`, `mastery_score`, `last_practiced_at`, `next_review_at`, `interval_days` | Repetição espaçada (SM-2) por arquétipo; alimenta a Skill Tree e o relatório de prontidão (`app/mastery.py`). |
-| `study_progress` | `topic_id`, `theory_done`, `practice_done`, `cheatsheet_done`, `quiz_passed`, `quiz_attempts`, `xp_earned`, `completed_at`, `updated_at` | Progresso do Study Codex por tópico. |
-| `study_activity` | `day`, `xp_gained`, `actions_count`, `topics_completed`, `updated_at` | Atividade diária de estudo (streak / heatmap). |
-| `question_feedback` | `id`, `bank_question_id`, `archetype_id`, `reason_code`, `note`, `created_at` | Feedback do usuário sobre uma questão; realimenta o Slot Planner e o Revisor. |
-| `user_settings` | `key`, `value_json`, `updated_at` | Preferências (`/api/settings/preferences`): data-alvo da prova, perfil PSI estrito por default, prática destrutiva. |
+| `sessions` | `id`, `title`, `mode` (`study` \| `mock_exam`), `variant` (`study`, `weakness_drill`, `speed_blitz`, `mistake_replay`, `guided_mock`, `blind_exam`), `strict_psi`, `difficulty_filter`, `domains_json`, `sample_json`, `status`, `started_at`, `finished_at`, `total_weight`, `earned_weight`, `earned_weight_exact`, `time_limit_minutes` | Practice session **drawn from the bank** (`sample_json` stores the effective per-domain distribution). |
+| `bank_questions` | `id`, `envelope_json`, `envelope_hash`, `title`, `domain`, `subtopics_json`, `difficulty`, `weight_pct`, `estimated_minutes`, `source` (`llm`\|`seed`), `state` (`draft`\|`probed`\|`published`\|`retired`), `archetype_id`, `fingerprint`, `probe_result_json`, `quality_score`, `quality_report_json`, `times_used`, `last_used_at`, `first_try_pass_count`, `avg_solve_seconds`, `generator_meta_json`, `supersedes_question_id`, `retired_reason`, `created_at` | **Question bank**: envelope immutable once published (a fix = a new version), dedup by semantic `envelope_hash`, per-question quality metrics (`LLM_PIPELINE_SPEC.md` §3). |
+| `session_items` | `id`, `session_id`, `bank_question_id`, `order_index`, `state` (`pending`\|`active`\|`passed`\|`skipped`), `started_at`, `passed_at`, `attempts`, `flagged`, `mounted_at`, `earned_weight`, `check_pass_ratio`, `notes_text`, `checked_tasks_json`, `hints_used`, `context_name`, `active_seconds`, `last_check_json` | Session queue referencing the bank. `Next` unlocked when `state == 'passed'` (or `skipped` after giving up); stores notepad, checklist, flags, and per-item partial credit. |
+| `generation_requests` | `id`, `request_json`, `status`, `scenarios_attempted`, `scenarios_published`, `created_at` | Pipeline audit: what was requested × what survived gates A–E. |
+| `check_runs` | `id`, `session_item_id`, `ran_at`, `all_passed`, `duration_ms`, `results_json` | Each **Check** click with per-item status (`PASS`/`FAIL`/`SKIP`/`ERROR` — contract in `LLM_PIPELINE_SPEC.md` §5). |
+| `llm_generations` | `id`, `created_at`, `stage`, `job_id`, `provider`, `model`, `prompt_params_json`, `attempts_used`, `raw_response`, `status`, `error_message`, `duration_ms`, `prompt_tokens`, `completion_tokens`, `reasoning_tokens` | Per-stage pipeline audit (enables diagnosing prompts that generated invalid YAML and measuring cost/latency). Excluded from portable snapshots. |
+| `terminal_sessions` | `id`, `tab_id`, `preset` (`host` \| `node`), `node_name`, `session_item_id` (nullable), `created_at`, `last_activity`, `closed_at`, `exit_status` | Reserved: not populated today — terminal tab records live in memory in the `TerminalRegistry` and do not survive a backend restart. |
+| `command_audit` | `id`, `session_id`, `session_item_id`, `command_text`, `ran_at` | Commands typed in local shell tabs during a session (always-on logging, with secret filtering) — input for Post-Mortem / Speed Coach (§8.4). Local only; excluded from portable snapshots. |
+| `archetype_mastery` | `archetype_id`, `domain`, `attempts`, `passes`, `first_try_passes`, `ewma_solve_ratio`, `mastery_score`, `last_practiced_at`, `next_review_at`, `interval_days` | Spaced repetition (SM-2) per archetype; feeds the Skill Tree and the readiness report (`app/mastery.py`). |
+| `study_progress` | `topic_id`, `theory_done`, `practice_done`, `cheatsheet_done`, `quiz_passed`, `quiz_attempts`, `xp_earned`, `completed_at`, `updated_at` | Study Codex progress per topic. |
+| `study_activity` | `day`, `xp_gained`, `actions_count`, `topics_completed`, `updated_at` | Daily study activity (streak / heatmap). |
+| `question_feedback` | `id`, `bank_question_id`, `archetype_id`, `reason_code`, `note`, `created_at` | User feedback on a question; feeds back into the Slot Planner and the Reviewer. |
+| `user_settings` | `key`, `value_json`, `updated_at` | Preferences (`/api/settings/preferences`): exam target date, strict PSI profile by default, destructive practice. |
 
 ---
 
-## 7. Add-ons do Cluster (instalados em 17/11/2026)
+## 7. Cluster Add-ons (installed on 2026-11-17)
 
-Estado atual após instalação/validação:
+Current state after installation/validation:
 
-- **metrics-server** (patch `--kubelet-insecure-tls`) — `kubectl top` funcional.
-- **Gateway API 1.2 (CRDs) + Envoy Gateway v1.2.0** (Helm OCI; GatewayClass `eg` + data plane validado com HTTP 200 via ClusterIP).
+- **metrics-server** (patch `--kubelet-insecure-tls`) — working `kubectl top`.
+- **Gateway API 1.2 (CRDs) + Envoy Gateway v1.2.0** (Helm OCI; GatewayClass `eg` + data plane validated with HTTP 200 via ClusterIP).
 - **local-path-provisioner v0.0.30** — StorageClass `local-path` (WaitForFirstConsumer).
-- **NetworkPolicy enforcement** — `weave-npc` roda como container do DaemonSet `weave-net` (detecção por container no doctor).
-- **helm/etcdctl** no host/controlplane; o reset L2-clean preserva os addons (sem snapshots de VM: não suportados no backend Multipass/macOS).
+- **NetworkPolicy enforcement** — `weave-npc` runs as a container of the `weave-net` DaemonSet (per-container detection in the doctor).
+- **helm/etcdctl** on host/controlplane; the L2 clean reset preserves addons (no VM snapshots: not supported on the Multipass/macOS backend).
 
-Histórico de recomendações (mantido como referência de cobertura):
+Recommendation history (kept as a coverage reference):
 
-O cluster atual tem `CoreDNS`, `Weave Net` e os componentes padrão de control plane. Para que a LLM possa gerar cenários reais de todos os tópicos do novo currículo CKA, o `ClusterDoctor` verificará e oferecerá instalação em 1 clique de:
+The current cluster has `CoreDNS`, `Weave Net`, and the standard control plane components. So the LLM can generate real scenarios for every topic in the new CKA curriculum, the `ClusterDoctor` will verify and offer 1-click installation of:
 
-1. **`metrics-server`** (necessário para questões de `kubectl top nodes/pods` e `HPA` em Troubleshooting/Workloads; scripts de referência já existem em `certified-kubernetes-administrator-course/metrics-staging-scripts/`).
-2. **`helm` CLI no Mac** (verificar via `which helm`; instalar via `brew install helm` se ausente).
-3. **Gateway API CRDs (`v1.2+`) + Controlador leve compatível com `arm64`** (ex.: NGINX Gateway Fabric ou Envoy Gateway) para cenários reais de `GatewayClass`, `Gateway` e `HTTPRoute`.
-4. **Provisionador local de Storage (`local-path-provisioner` da Rancher)** para permitir cenários com `StorageClass` dinâmica (`WaitForFirstConsumer`), além de PVs estáticos (`hostPath`/`local`).
-5. **`etcdctl` no nó `controlplane`** (verificar presença para cenários de `etcd` snapshot save/restore sem precisar baixar durante o treino).
-6. **`weave-npc` (NetworkPolicy enforcement):** sem os pods `weave-npc-*`, cenários de `NetworkPolicy` passam sempre (política não é aplicada). O `ClusterDoctor` reporta o addon `network_policy_enforcement: on/off` e o gerador de cenários só propõe NetworkPolicy quando `on`.
+1. **`metrics-server`** (needed for `kubectl top nodes/pods` and `HPA` questions in Troubleshooting/Workloads; reference scripts already exist in `certified-kubernetes-administrator-course/metrics-staging-scripts/`).
+2. **`helm` CLI on the Mac** (check via `which helm`; install with `brew install helm` if missing).
+3. **Gateway API CRDs (`v1.2+`) + an `arm64`-compatible lightweight controller** (e.g., NGINX Gateway Fabric or Envoy Gateway) for real `GatewayClass`, `Gateway`, and `HTTPRoute` scenarios.
+4. **Local storage provisioner (Rancher's `local-path-provisioner`)** to enable scenarios with dynamic `StorageClass` (`WaitForFirstConsumer`), plus static PVs (`hostPath`/`local`).
+5. **`etcdctl` on the `controlplane` node** (check presence for `etcd` snapshot save/restore scenarios without needing to download during practice).
+6. **`weave-npc` (NetworkPolicy enforcement):** without the `weave-npc-*` pods, `NetworkPolicy` scenarios always pass (policy is not enforced). The `ClusterDoctor` reports the addon `network_policy_enforcement: on/off` and the scenario generator only proposes NetworkPolicy when `on`.
 
 ---
 
-## 8. Terminal Web no Browser (`TerminalService`)
+## 8. Web Terminal in the Browser (`TerminalService`)
 
-> Requisito do usuário: executar os comandos dos cenários **no próprio browser** e pedir a validação (Check) sem sair da plataforma. Especificação completa do componente.
+> User requirement: run scenario commands **in the browser itself** and request validation (Check) without leaving the platform. Complete component specification.
 
-### 8.1 Decisão de Design: PTY in-process no host
+### 8.1 Design Decision: In-process PTY on the host
 
-| Alternativa | Veredito | Motivo |
+| Alternative | Verdict | Reason |
 | :--- | :--- | :--- |
-| **PTY in-process (`pty.openpty`) + WebSocket + xterm.js** | ✅ **Escolhida** | Zero dependências externas (FastAPI/uvicorn já fazem WS; `pty`/`fcntl` são stdlib); permite audit de telemetria, controle de ciclo de vida, abas preset e reconexão. Roda no host onde vivem `kubectl`, `helm` e o `~/.ssh/config` gerenciado. |
-| `ttyd` / `gotty` (binário externo) | ❌ | Não instalados (verificado); processo separado sem controle de sessão, sem audit, sem integração com abas de nó. |
-| `tmux` attach | ❌ | Não instalado no host (verificado); desnecessário — o registro de PTYs no backend já dá persistência entre reloads. |
-| SSH do browser direto aos nós (asyncssh→WS) | ❌ como base | O usuário precisa do shell do **host** (kubectl/helm/vim); abas de nó usam o transporte do provider (`ssh cka-<nó>` no Multipass, `docker exec` no kind) dentro do mesmo PTY. |
+| **In-process PTY (`pty.openpty`) + WebSocket + xterm.js** | ✅ **Chosen** | Zero external dependencies (FastAPI/uvicorn already do WS; `pty`/`fcntl` are stdlib); enables telemetry audit, lifecycle control, preset tabs, and reconnection. Runs on the host where `kubectl`, `helm`, and the managed `~/.ssh/config` live. |
+| `ttyd` / `gotty` (external binary) | ❌ | Not installed (verified); separate process with no session control, no audit, no integration with node tabs. |
+| `tmux` attach | ❌ | Not installed on the host (verified); unnecessary — backend PTY registration already gives persistence across reloads. |
+| Browser SSH directly to nodes (asyncssh→WS) | ❌ as the base | The user needs the **host** shell (kubectl/helm/vim); node tabs use the provider transport (`ssh cka-<node>` on Multipass, `docker exec` on kind) inside the same PTY. |
 
-### 8.2 Como Funciona
+### 8.2 How It Works
 
-1. **Criação de aba (spawn lazy):** `POST /api/terminal/tabs` com `{preset: "host"}` ou `{preset: "node", node: "node01"}` registra a aba; o shell só nasce quando o **primeiro xterm conecta** no WebSocket — assim o prompt (ex.: powerlevel10k) já encontra o terminal pronto para responder às queries de capacidades.
-   - `host` → spawn de um **exam shell isolado** num PTY (`pty.openpty()` + `os.fork` + `setsid`): usa o `$SHELL` do usuário quando é um caminho executável (fallback `zsh` no macOS, `bash` no Linux/WSL2), **sem carregar os rcfiles pessoais** — `ZDOTDIR` (zsh) ou `--rcfile` (bash) apontam para a scratch da aba, onde são gerados `.zshrc`/`.bashrc` limpos, `.cka_env.sh` (`alias k=kubectl`, `$do="--dry-run=client -o yaml"`, `$now="--force --grace-period=0"`, completion) e `.vimrc`. Com `strict_psi`, o perfil enxuga para `set nocompatible` e um `.cka_env.sh` estrito.
-   - **Ambiente do PTY isolado:** `terminal_env()` remove `EDITOR`/`VISUAL`/`KUBE_EDITOR`/`GIT_EDITOR` herdados do servidor, fixa `TERM=xterm-256color`, **sobrescreve `KUBECONFIG`** para o kubeconfig dedicado (`~/.cka-arena/kubeconfig` — nunca a config global do usuário) e, para abas `host`, aponta `CKA_ARENA_WORKDIR`, `TMPDIR`, `VIMINIT`, `CKA_EXAM_PROFILE` e `CKA_ASSETS` para a scratch da aba.
-   - `node` → o provider decide o transporte: Multipass faz spawn de `ssh cka-<node>` (usa o bloco gerenciado do `~/.ssh/config`; cai para password prompt só se o bridge ainda não foi provisionado — o Cluster Doctor orienta); kind executa `docker exec -it <container> bash`.
-   - **Workdir scratch por aba:** toda aba `host` nasce em `~/.cka-arena/scratch/<tab_id>` (`cwd` + `TMPDIR`) — YAMLs e temporários criados no terminal ficam lá, nunca na pasta do projeto. A workdir é apagada no `close()` da aba (fechamento explícito, idle-timeout ou prune) com **guarda de caminho** (`remove_scratch` recusa qualquer caminho fora de `SCRATCH_ROOT`); `sweep_scratch()` no startup do servidor remove workdirs órfãs de crashes. Registra `{tab_id, master_fd, pid, preset, workdir, created_at}` no `TerminalRegistry`.
-2. **WebSocket:** `WS /ws/terminal/{tab_id}` — mensagens do cliente: `{"type":"input","data":"..."}` e `{"type":"resize","cols":N,"rows":N}` (aplicada via `fcntl.ioctl(master_fd, TIOCSWINSZ, ...)`); do servidor: frames de saída do PTY (texto puro) e `{"type":"exit","status":N}`.
-   - **Um único assinante por PTY:** se a aba já tem WebSocket conectado, um segundo attach recebe `4409` (evita dois xterms respondendo às mesmas queries do prompt). Reload reutiliza apenas abas sem assinantes.
-   - **Replay sanitizado:** o buffer de replay remove sequências que **solicitam respostas** do terminal (OSC `4;?`/`10;?`/`11;?`/`12;?`, DA, DSR, DECRQM `$p/$y`, CPR, window-ops, DCS) e respostas de cor (`rgb:...`) — sem isso, prompts como powerlevel10k re-perguntavam ao terminal a cada reconexão, gerando loop de respostas (`rgb:...`/`$y` no prompt). SGR/cores, títulos OSC e movimentos de cursor são preservados.
-3. **Streaming de saída:** um reader asyncio por PTY (`loop.add_reader` no master fd, ou thread dedicada → asyncio queue) publica os bytes para todos os WS conectados à aba e mantém um **ring buffer de replay** (últimos 256 KB por aba).
-4. **Reconexão:** reload do browser ou queda de rede → cliente chama `GET /api/terminal/tabs`, reatacha ao PTY vivo e recebe o replay do ring buffer. Reinício do backend encerra as sessões (comportamento documentado e sinalizado na UI como "terminal reiniciado").
-5. **Limites:** máx. 6 abas ativas; timeout de idle (30 min sem input nem WS) com aviso 60s antes; fechamento = `SIGHUP` no grupo do processo.
-6. **Correlação com o cenário ativo:** os comandos digitados nas abas `host` são drenados para `command_audit` vinculados ao item ativo da sessão (§8.4).
+1. **Tab creation (lazy spawn):** `POST /api/terminal/tabs` with `{preset: "host"}` or `{preset: "node", node: "node01"}` registers the tab; the shell is only born when the **first xterm connects** to the WebSocket — so the prompt (e.g., powerlevel10k) already finds the terminal ready to answer capability queries.
+   - `host` → spawns an **isolated exam shell** on a PTY (`pty.openpty()` + `os.fork` + `setsid`): uses the user's `$SHELL` when it is an executable path (fallback `zsh` on macOS, `bash` on Linux/WSL2), **without loading personal rcfiles** — `ZDOTDIR` (zsh) or `--rcfile` (bash) point to the tab's scratch, where clean `.zshrc`/`.bashrc`, `.cka_env.sh` (`alias k=kubectl`, `$do="--dry-run=client -o yaml"`, `$now="--force --grace-period=0"`, completion) and `.vimrc` are generated. With `strict_psi`, the profile is slimmed down to `set nocompatible` and a strict `.cka_env.sh`.
+   - **Isolated PTY environment:** `terminal_env()` removes `EDITOR`/`VISUAL`/`KUBE_EDITOR`/`GIT_EDITOR` inherited from the server, fixes `TERM=xterm-256color`, **overwrites `KUBECONFIG`** to the dedicated kubeconfig (`~/.cka-arena/kubeconfig` — never the user's global config) and, for `host` tabs, points `CKA_ARENA_WORKDIR`, `TMPDIR`, `VIMINIT`, `CKA_EXAM_PROFILE`, and `CKA_ASSETS` to the tab's scratch.
+   - `node` → the provider decides the transport: Multipass spawns `ssh cka-<node>` (uses the managed block in `~/.ssh/config`; falls back to a password prompt only if the bridge has not been provisioned yet — the Cluster Doctor guides it); kind runs `docker exec -it <container> bash`.
+   - **Per-tab scratch workdir:** every `host` tab is born in `~/.cka-arena/scratch/<tab_id>` (`cwd` + `TMPDIR`) — YAMLs and temporaries created in the terminal land there, never in the project folder. The workdir is deleted on tab `close()` (explicit close, idle-timeout, or prune) with **path guarding** (`remove_scratch` refuses any path outside `SCRATCH_ROOT`); `sweep_scratch()` on server startup removes orphaned workdirs from crashes. Registers `{tab_id, master_fd, pid, preset, workdir, created_at}` in the `TerminalRegistry`.
+2. **WebSocket:** `WS /ws/terminal/{tab_id}` — client messages: `{"type":"input","data":"..."}` and `{"type":"resize","cols":N,"rows":N}` (applied via `fcntl.ioctl(master_fd, TIOCSWINSZ, ...)`); from the server: PTY output frames (plain text) and `{"type":"exit","status":N}`.
+   - **A single subscriber per PTY:** if the tab already has a connected WebSocket, a second attach receives `4409` (avoids two xterms answering the same prompt queries). Reload only reuses tabs without subscribers.
+   - **Sanitized replay:** the replay buffer strips sequences that **request terminal responses** (OSC `4;?`/`10;?`/`11;?`/`12;?`, DA, DSR, DECRQM `$p/$y`, CPR, window-ops, DCS) and color responses (`rgb:...`) — without this, prompts like powerlevel10k re-queried the terminal on every reconnection, generating response loops (`rgb:...`/`$y` in the prompt). SGR/colors, OSC titles, and cursor movements are preserved.
+3. **Output streaming:** one asyncio reader per PTY (`loop.add_reader` on the master fd, or a dedicated thread → asyncio queue) publishes bytes to all WebSockets attached to the tab and maintains a **replay ring buffer** (last 256 KB per tab).
+4. **Reconnection:** browser reload or network drop → client calls `GET /api/terminal/tabs`, reattaches to the live PTY, and receives the ring buffer replay. Backend restart ends the sessions (documented behavior, signaled in the UI as "terminal restarted").
+5. **Limits:** max. 6 active tabs; idle timeout (30 min without input or WS) with a 60s warning; close = `SIGHUP` to the process group.
+6. **Correlation with the active scenario:** commands typed in `host` tabs are drained into `command_audit` linked to the session's active item (§8.4).
 
 ### 8.3 Frontend (`static/js/terminal.js` + `static/vendor/xterm`)
 
-- `xterm.js` + `addon-fit` **vendored** (sem CDN — funciona offline, igual ao restante da plataforma).
-- Barra de abas: abas ativas + popover **`+ Shell`** com os 4 destinos (Local shell/controlplane/node01/node02) — um controle em vez de uma fileira de botões; aba ativa foca o terminal.
-- O rodapé do painel mostra a **workdir isolada** (`scratch/<tab>`), `Find`, `Zen`, `Native`, `Clear` e um botão **Check** (mesma ação do Check da coluna da questão) — o ciclo *editar → verificar → corrigir* acontece sem trocar de painel.
-- Copy-Pills do enunciado, ao clicar, copiam para o clipboard **e** dão foco no terminal (`⌘V` no macOS, `Ctrl+Shift+V` no Linux/WSL2); comportamento idêntico ao do exame real.
-- Atalhos globais (`⌘` no macOS; `Ctrl` no Linux/WSL2, `Ctrl+Shift` com o terminal focado): `⌘↵` (Check), `⌘⇧↵` (Next), `⌘K` (Command Palette), `⌘1..5` (Arena/Readiness/Studio/Settings/Study Codex), `⌘B` (Zen Terminal), `⌘F` (busca no scrollback), `⌘L` (limpa o terminal), `⌘` + barra invertida (mostra/esconde o terminal embutido), `⌘/` (atalhos), `Esc` (fecha modal/busca). Contrato completo em `UX_UI_SPEC.md` §6 e `DESIGN.md` §4.
+- `xterm.js` + `addon-fit` **vendored** (no CDN — works offline, like the rest of the platform).
+- Tab bar: active tabs + **`+ Shell`** popover with the 4 destinations (Local shell/controlplane/node01/node02) — one control instead of a row of buttons; the active tab focuses the terminal.
+- The panel footer shows the **isolated workdir** (`scratch/<tab>`), `Find`, `Zen`, `Native`, `Clear`, and a **Check** button (same action as the question column's Check) — the *edit → verify → fix* loop happens without switching panels.
+- Prompt Copy-Pills, when clicked, copy to the clipboard **and** focus the terminal (`⌘V` on macOS, `Ctrl+Shift+V` on Linux/WSL2); behavior identical to the real exam.
+- Global shortcuts (`⌘` on macOS; `Ctrl` on Linux/WSL2, `Ctrl+Shift` with the terminal focused): `⌘↵` (Check), `⌘⇧↵` (Next), `⌘K` (Command Palette), `⌘1..5` (Arena/Readiness/Studio/Settings/Study Codex), `⌘B` (Zen Terminal), `⌘F` (scrollback search), `⌘L` (clears the terminal), `⌘` + backslash (shows/hides the embedded terminal), `⌘/` (shortcuts), `Esc` (closes modal/search). Full contract in `UX_UI_SPEC.md` §6 and `DESIGN.md` §4.
 
-### 8.4 Registro Local de Comandos (Telemetria)
+### 8.4 Local Command Log (Telemetry)
 
-- **Sempre ativo, só local.** Nas abas `host`, o exam shell grava cada comando (hook `preexec` no zsh, `PROMPT_COMMAND` no bash) em `.cmd_history.log` dentro da scratch da aba.
-- Nas transições da sessão (Check, Skip, Next, troca de questão, Finish), `TerminalRegistry.collect_command_history()` drena esse log para a tabela `command_audit`, vinculado ao item ativo. Linhas que casam com o padrão de segredo (`token`, `password`, `api key`, `secret`, `sk-…`, `export *KEY`) são descartadas antes de gravar (limite de 400 caracteres por linha).
-- Uso: o **Post-Mortem / Speed Coach** (`GET /api/sessions/{id}/postmortem/{item}`) analisa a abordagem (uso de `k`, `$do`, `$now`, comandos imperativos rápidos) e o ritmo da questão.
-- Privacidade: fica no SQLite local; o `.cmd_history.log` é apagado junto com a scratch da aba; a tabela é excluída dos snapshots portáveis (`app/backup.py`) e o pipeline de geração não a lê — a LLM **não** recebe o histórico de comandos e a avaliação continua 100% determinística por estado.
+- **Always on, local only.** In `host` tabs, the exam shell records every command (`preexec` hook on zsh, `PROMPT_COMMAND` on bash) into `.cmd_history.log` inside the tab's scratch.
+- On session transitions (Check, Skip, Next, question switch, Finish), `TerminalRegistry.collect_command_history()` drains that log into the `command_audit` table, linked to the active item. Lines matching the secret pattern (`token`, `password`, `api key`, `secret`, `sk-…`, `export *KEY`) are discarded before storing (400-character limit per line).
+- Usage: the **Post-Mortem / Speed Coach** (`GET /api/sessions/{id}/postmortem/{item}`) analyzes the approach (use of `k`, `$do`, `$now`, fast imperative commands) and the question's pacing.
+- Privacy: stays in local SQLite; `.cmd_history.log` is deleted together with the tab's scratch; the table is excluded from portable snapshots (`app/backup.py`) and the generation pipeline never reads it — the LLM does **not** receive the command history, and grading remains 100% deterministic by state.
 
-## 9. Ciclo de Vida do Cluster (`ClusterPowerManager`)
+## 9. Cluster Lifecycle (`ClusterPowerManager`)
 
-> Requisito do usuário: o cluster é inicializado junto com a aplicação, com um **botão na tela para ligar o cluster e iniciar os cenários**.
+> User requirement: the cluster starts together with the app, with an **on-screen button to power the cluster on and start scenarios**.
 
-### 9.0 Provider de nós (Multipass × kind)
+### 9.0 Node provider (Multipass × kind)
 
-A plataforma fala apenas **nomes lógicos** (`controlplane/node01/node02`); `app/provider/`
-traduz para o ambiente: `MultipassProvider` (SSH por IP de bridge, `multipass start/stop`,
-terminal `ssh cka-<node>`) e `KindProvider` (containers kind, `docker exec`, terminal
-`docker exec -it <ctr> bash`, `docker start/stop`, mapeamento em `~/.cka-arena/nodes.json`).
-Seleção: `CKA_PROVIDER` → `~/.cka-arena/provider` → default por S.O. Toda execução de nó
-(engine, pipeline, validator, doctor, power, terminal) passa por `provider.get()` — nenhum
-módulo chama SSH/Multipass diretamente. O `setup.sh` (raiz do repo, ver `SETUP_PLAN.md`)
-detecta o S.O., audita pré-requisitos com confirmação, provisiona (`scripts/cluster/up.sh`
-ou `kind-up.sh`), instala addons (`app/addons.py`), publica os seeds e sobe o servidor.
+The platform speaks only **logical names** (`controlplane/node01/node02`); `app/provider/`
+translates to the environment: `MultipassProvider` (SSH by bridge IP, `multipass start/stop`,
+terminal `ssh cka-<node>`) and `KindProvider` (kind containers, `docker exec`, terminal
+`docker exec -it <ctr> bash`, `docker start/stop`, mapping in `~/.cka-arena/nodes.json`).
+Selection: `CKA_PROVIDER` → `~/.cka-arena/provider` → per-OS default. Every node execution
+(engine, pipeline, validator, doctor, power, terminal) goes through `provider.get()` — no
+module calls SSH/Multipass directly. `setup.sh` (repo root, see `SETUP_PLAN.md`)
+detects the OS, audits prerequisites with confirmation, provisions (`scripts/cluster/up.sh`
+or `kind-up.sh`), installs addons (`app/addons.py`), publishes the seeds, and starts the server.
 
-### 9.1 Máquina de Estados
+### 9.1 State Machine
 
 ```mermaid
 stateDiagram-v2
@@ -318,158 +318,158 @@ stateDiagram-v2
     unknown --> ready: VMs Running + readyz OK + 3/3 Ready
     off --> starting: POST /api/cluster/power (start)
     starting --> ready: boot sequence 100%
-    starting --> degraded: falha parcial (ex.: 2/3 nós)
-    ready --> degraded: cenário quebrou nó / addon off
+    starting --> degraded: partial failure (e.g., 2/3 nodes)
+    ready --> degraded: scenario broke node / addon off
     degraded --> ready: Doctor/Restore Baseline OK
     ready --> stopping: POST (stop)
     stopping --> off: multipass stop OK
-    unknown --> daemon_down: multipass CLI falhou
-    daemon_down --> unknown: daemon restaurado (manual)
+    unknown --> daemon_down: multipass CLI failed
+    daemon_down --> unknown: daemon restored (manual)
 ```
 
-- Fontes de estado: `multipass list --format json` (por VM: `Running/Stopped` + IPs), `kubectl --context cka get --raw /readyz`, `kubectl get nodes` (condição Ready).
-- O estado é reavaliado no launch da app, ao abrir a home e a cada 15s enquanto houver UI conectada (SSE `cluster.power.state_changed`).
+- State sources: `multipass list --format json` (per VM: `Running/Stopped` + IPs), `kubectl --context cka get --raw /readyz`, `kubectl get nodes` (Ready condition).
+- State is re-evaluated on app launch, when opening the home view, and every 15s while UI is connected (SSE `cluster.power.state_changed`).
 
-### 9.2 Sequência de Boot Instrumentada (`action: start` → job assíncrono + SSE)
+### 9.2 Instrumented Boot Sequence (`action: start` → async job + SSE)
 
-| Passo | Comando/Critério | Timeout |
+| Step | Command/Criterion | Timeout |
 | :--- | :--- | :--- |
-1. Ligar VMs | `multipass start controlplane node01 node02` | 300s |
-2. SSH disponível | `nc -z <ip> 22` nos 3 nós (IPs de `multipass list`) | 240s |
-3. SSH config regen | Reescrever bloco gerenciado `~/.ssh/config` com IPs atuais | 5s |
-4. API de pé | `kubectl --kubeconfig ~/.cka-arena/kubeconfig --context cka get --raw /readyz` (com self-heal §9.3) | 180s |
-5. Nós prontos | `kubectl wait --for=condition=Ready node --all` | 300s |
-6. Doctor rápido | addons (metrics-server, weave-npc, Gateway API, local-path), `helm`/`etcdctl` nos nós | 30s |
-7. Baseline | Baseline de arquivos nos nós (manifests/kubelet/containerd/systemd) se ainda não existir (§4) | 60s |
+1. Power VMs on | `multipass start controlplane node01 node02` | 300s |
+2. SSH available | `nc -z <ip> 22` on the 3 nodes (IPs from `multipass list`) | 240s |
+3. SSH config regen | Rewrite the managed `~/.ssh/config` block with current IPs | 5s |
+4. API up | `kubectl --kubeconfig ~/.cka-arena/kubeconfig --context cka get --raw /readyz` (with self-heal §9.3) | 180s |
+5. Nodes ready | `kubectl wait --for=condition=Ready node --all` | 300s |
+6. Quick doctor | addons (metrics-server, weave-npc, Gateway API, local-path), `helm`/`etcdctl` on nodes | 30s |
+7. Baseline | File baseline on nodes (manifests/kubelet/containerd/systemd) if it does not exist yet (§4) | 60s |
 
-- Cada passo emite `cluster.power.progress {step, detail}` via SSE; a UI mostra overlay "Ligando cluster… passo 4/7".
-- Falha em qualquer passo → estado `degraded` (ou `off`/`daemon_down`) com o erro exato e sugestão de correção.
+- Each step emits `cluster.power.progress {step, detail}` via SSE; the UI shows the overlay "Powering on cluster… step 4/7".
+- Failure at any step → `degraded` state (or `off`/`daemon_down`) with the exact error and a fix suggestion.
 
-### 9.3 Self-Heal Pós-DHCP (IP mudou após reboot das VMs)
+### 9.3 Post-DHCP Self-Heal (IP changed after VM reboot)
 
-1. `readyz` falhou mas SSH responde → baixa `/etc/kubernetes/admin.conf` do controlplane via SSH.
-2. Reescreve `server: https://<ip-atual>:6443` e grava em `~/.cka-arena/kubeconfig`.
-3. Revalida `readyz`. Se ainda falhar, reporta `degraded` com diagnóstico (ex.: kubelet do controlplane parado → segue fluxo Doctor).
-4. O `~/.ssh/config` gerenciado é regenerado no passo 3 do boot **sempre** (idempotente).
+1. `readyz` failed but SSH answers → downloads `/etc/kubernetes/admin.conf` from the controlplane via SSH.
+2. Rewrites `server: https://<current-ip>:6443` and writes it to `~/.cka-arena/kubeconfig`.
+3. Revalidates `readyz`. If it still fails, reports `degraded` with a diagnosis (e.g., controlplane kubelet stopped → follows the Doctor flow).
+4. The managed `~/.ssh/config` is regenerated at boot step 3 **always** (idempotent).
 
-### 9.4 Desligar, Reiniciar e Boot da Aplicação
+### 9.4 Shutdown, Restart, and App Boot
 
-- `stop`: UI pede confirmação ("cenário ativo será descartado; VMs serão paradas") → `multipass stop controlplane node01 node02` → `off`. Nada de cleanup kubectl (cluster some com as VMs; namespaces de cenário são efêmeros por design).
-- `restart` = `stop` + `start` (útil quando um Boss Fight deixou tudo quebrado e o usuário quer bloodless reset).
-- **Launch da app:** `GET /api/cluster/power` no boot; se `off`, a home mostra CTA único **"⏻ Power On & Practice"** (Studio e Workspace ficam bloqueados com pills explicativos). `auto_start_on_launch: true` dispara o start automaticamente ao abrir a app — **default ON** (decisão D3).
-   - `daemon_down`: a listagem do provider falhou (ex.: daemon do Multipass fora do ar) → estado próprio com o erro bruto; a plataforma **não executa sudo** — reiniciar o daemon é manual (`sudo launchctl kickstart -k system/com.canonical.multipass` no macOS, `snap restart multipass` no Linux).
+- `stop`: UI asks for confirmation ("active scenario will be discarded; VMs will be stopped") → `multipass stop controlplane node01 node02` → `off`. No kubectl cleanup (the cluster vanishes with the VMs; scenario namespaces are ephemeral by design).
+- `restart` = `stop` + `start` (useful when a Boss Fight left everything broken and the user wants a bloodless reset).
+- **App launch:** `GET /api/cluster/power` on boot; if `off`, the home shows a single CTA **"⏻ Power On & Practice"** (Studio and Workspace stay locked with explanatory pills). `auto_start_on_launch: true` triggers the start automatically when opening the app — **default ON** (decision D3).
+   - `daemon_down`: the provider listing failed (e.g., Multipass daemon down) → its own state with the raw error; the platform **never runs sudo** — restarting the daemon is manual (`sudo launchctl kickstart -k system/com.canonical.multipass` on macOS, `snap restart multipass` on Linux).
 
 ### 9.5 API
 
-| Endpoint | Método | Retorno |
+| Endpoint | Method | Response |
 | :--- | :--- | :--- |
 | `/api/cluster/power` | GET | `{state, vms: [{name, multipass_state, ips}], last_ready_at, active_job?}` |
-| `/api/cluster/power` | POST | `{action: "start"\|"stop"\|"restart"}` → `202 {job_id, action}` (job único por vez; `409` se já houver) |
+| `/api/cluster/power` | POST | `{action: "start"\|"stop"\|"restart"}` → `202 {job_id, action}` (one job at a time; `409` if one exists) |
 | `/api/events` | SSE | `cluster.power.state_changed`, `cluster.power.progress`, `cluster.reset.done`, `generation.progress` / `heartbeat` / `snapshot` / `done` (Studio) |
 
-## 10. Segurança do Terminal & Exposição de Rede
+## 10. Terminal Security & Network Exposure
 
-1. **Bind fixo em `127.0.0.1`** (`config.HOST`; só a porta é configurável, via `CKA_PORT`). O terminal é um shell do host: expô-lo é RCE por design.
-2. **Origin check no WebSocket:** `/ws/terminal/{tab_id}` recusa (fecha com `4403`) conexões cujo header `Origin` não seja o da própria app (`http://127.0.0.1:<porta>` ou `http://localhost:<porta>`), a menos que `CKA_ARENA_ALLOW_REMOTE=1`. Conexões sem `Origin` (clientes não-browser) passam.
-3. **Token opcional `CKA_ARENA_TOKEN`:** quando definido, as rotas `/api/*` (exceto `/api/events`) exigem `Authorization: Bearer <token>`. O token **não cobre** `/ws/terminal/*`, `/` e `/static`, e a UI embutida não o envia — serve para clientes de API locais, não para expor a plataforma.
-4. **Single-user local:** sem auth por padrão. A proteção real é o bind em loopback: **não coloque proxy/túnel na frente da porta** — quem alcançar a porta alcança um shell da sua máquina.
-5. **Kubeconfig dedicado:** todo `kubectl` do backend e do exam shell usa `~/.cka-arena/kubeconfig` (context `cka`), nunca o `~/.kube/config` global.
-6. **Registro de comandos é local-only** (§8.4); a LLM nunca vê o histórico de comandos.
+1. **Fixed bind on `127.0.0.1`** (`config.HOST`; only the port is configurable, via `CKA_PORT`). The terminal is a host shell: exposing it is RCE by design.
+2. **WebSocket origin check:** `/ws/terminal/{tab_id}` refuses (closes with `4403`) connections whose `Origin` header is not the app's own (`http://127.0.0.1:<port>` or `http://localhost:<port>`), unless `CKA_ARENA_ALLOW_REMOTE=1`. Connections without `Origin` (non-browser clients) pass.
+3. **Optional token `CKA_ARENA_TOKEN`:** when set, the `/api/*` routes (except `/api/events`) require `Authorization: Bearer <token>`. The token does **not cover** `/ws/terminal/*`, `/` and `/static`, and the embedded UI does not send it — it serves local API clients, not exposing the platform.
+4. **Local single-user:** no auth by default. The real protection is the loopback bind: **do not put a proxy/tunnel in front of the port** — whoever reaches the port reaches a shell on your machine.
+5. **Dedicated kubeconfig:** every backend and exam shell `kubectl` uses `~/.cka-arena/kubeconfig` (context `cka`), never the global `~/.kube/config`.
+6. **Command logging is local-only** (§8.4); the LLM never sees the command history.
 
 ---
 
-## 11. Banco de Questões & Amostragem por Percentuais da Prova
+## 11. Question Bank & Exam-Weight Sampling
 
-**Modelo:** a geração **publica** no banco (`bank_questions.state = published`); a prática **consome** com sorteio ponderado — desacoplamento total entre produzir e praticar (`LLM_PIPELINE_SPEC.md` §3–§4).
+**Model:** generation **publishes** to the bank (`bank_questions.state = published`); practice **consumes** with a weighted draw — full decoupling between producing and practicing (`LLM_PIPELINE_SPEC.md` §3–§4).
 
-- **Amostragem:** largest remainder sobre os pesos oficiais (Troubleshooting 30 · Cluster Arch 25 · S&N 20 · Workloads 15 · Storage 10), renormalizados quando o usuário filtra domínios/dificuldade; dentro da célula ordena por `times_used ASC, random()`; mesma questão nunca repete na sessão; célula vazia → fallback proporcional + CTA "Gerar mais deste domínio".
-- **API:** `GET /api/bank/coverage` (grade domínio×dificuldade p/ Studio) · `POST /api/practice` `{count, domains?, difficulty?, mode?, variant?, archetype_id?, allow_destructive?, strict_psi?}` (valida cluster `ready`, cria `sessions`+`session_items`, aplica Q1) · `POST /api/bank/questions/{id}/retire`.
-- **Preview na UI:** antes de iniciar, o modal mostra a distribuição exata ("5× Troubleshooting · 4× Cluster Architecture · …").
+- **Sampling:** largest remainder over the official weights (Troubleshooting 30 · Cluster Arch 25 · S&N 20 · Workloads 15 · Storage 10), renormalized when the user filters domains/difficulty; within a cell, ordered by `times_used ASC, random()`; the same question never repeats in a session; empty cell → proportional fallback + CTA "Generate more from this domain".
+- **API:** `GET /api/bank/coverage` (domain×difficulty grid for the Studio) · `POST /api/practice` `{count, domains?, difficulty?, mode?, variant?, archetype_id?, allow_destructive?, strict_psi?}` (requires cluster `ready`, creates `sessions`+`session_items`, applies Q1) · `POST /api/bank/questions/{id}/retire`.
+- **UI preview:** before starting, the modal shows the exact distribution ("5× Troubleshooting · 4× Cluster Architecture · …").
 
-## 12. Teardown de Sessão & Reset Limpo do Cluster (L0/L1/L2)
+## 12. Session Teardown & Clean Cluster Reset (L0/L1/L2)
 
-> Requisito: ao final da sessão de prática, o cluster volta **limpo**. Três níveis (`LLM_PIPELINE_SPEC.md` §6):
+> Requirement: at the end of a practice session, the cluster returns **clean**. Three levels (`LLM_PIPELINE_SPEC.md` §6):
 
-| Nível | Gatilho | Ação | Duração |
+| Level | Trigger | Action | Duration |
 | :--- | :--- | :--- | :--- |
-| **L0** | `Next`/`Pular` (por questão) | cleanup da questão: namespaces do cenário, recursos labelados, backups de nó restaurados, releases Helm, probes | 2–10s |
-| **L1** | fim de sessão (default) | varredura global por label `cka-arena.io/managed: "true"` + restauração de backups pendentes + **drift check** vs baseline | ~30s |
-| **L2 — clean reset** | pós-`mock_exam` (auto), drift detectado, ou botão "Clean reset" | L1 + restauração do baseline de arquivos dos nós + `restart containerd/kubelet` + wait Ready + drift check (addons preservados; sem snapshots de VM — não suportados no Multipass/macOS) | ~1–2 min |
+| **L0** | `Next`/`Skip` (per question) | question cleanup: scenario namespaces, labeled resources, restored node backups, Helm releases, probes | 2–10s |
+| **L1** | session end (default) | global sweep by label `cka-arena.io/managed: "true"` + pending backup restoration + **drift check** vs baseline | ~30s |
+| **L2 — clean reset** | after `mock_exam` (auto), detected drift, or the "Clean reset" button | L1 + restore of the nodes' file baseline + `restart containerd/kubelet` + wait Ready + drift check (addons preserved; no VM snapshots — unsupported on Multipass/macOS) | ~1–2 min |
 
-- **L2 = clean reset (não usa snapshots de VM):** o backend do Multipass no macOS (QEMU) responde `The snapshots feature is not implemented on this backend` — `multipass snapshot/restore` existem no CLI mas não funcionam aqui (verificado ao vivo). O reset limpo faz: L1 (recursos gerenciados + backups pendentes) → restauração do **baseline de arquivos** dos nós (`/var/backups/cka-arena/baseline/`) → `systemctl restart containerd kubelet` nos 3 nós → espera API/nós Ready → drift check. Addons em namespaces não gerenciados (`kube-system`, `envoy-gateway-system`, `local-path-storage`) permanecem instalados. Validado ao vivo: `drift=false`, 3/3 Ready, addons presentes.
-- **API:** `POST /api/sessions/{id}/finish` `{reset: "fast"\|"baseline"}` (L2 é forçado quando a sessão contém questões destrutivas) · `POST /api/cluster/reset-baseline` (resultado do drift no evento SSE `cluster.reset.done`).
-- **UI:** tela de fim de sessão com resumo (acertos 1ª tentativa, tempo, pior domínio) + escolha L1/L2 (default L1; L2 recomendado com drift ou pós-simulado).
+- **L2 = clean reset (no VM snapshots):** the Multipass backend on macOS (QEMU) answers `The snapshots feature is not implemented on this backend` — `multipass snapshot/restore` exist in the CLI but do not work here (verified live). The clean reset does: L1 (managed resources + pending backups) → restore of the nodes' **file baseline** (`/var/backups/cka-arena/baseline/`) → `systemctl restart containerd kubelet` on the 3 nodes → wait API/nodes Ready → drift check. Addons in unmanaged namespaces (`kube-system`, `envoy-gateway-system`, `local-path-storage`) remain installed. Verified live: `drift=false`, 3/3 Ready, addons present.
+- **API:** `POST /api/sessions/{id}/finish` `{reset: "fast"\|"baseline"}` (L2 is forced when the session contains destructive questions) · `POST /api/cluster/reset-baseline` (drift result in the SSE event `cluster.reset.done`).
+- **UI:** end-of-session screen with a summary (first-attempt passes, time, worst domain) + L1/L2 choice (default L1; L2 recommended with drift or after a mock exam).
 
 ---
 
-## 13. Referência de API (consolidada)
+## 13. API Reference (consolidated)
 
-| Endpoint | Método | Payload → Resposta |
+| Endpoint | Method | Payload → Response |
 | :--- | :--- | :--- |
 | **Cluster** | | |
-| `/api/health` | GET | → `{ok, app, version, build}` (probe de vida) |
+| `/api/health` | GET | → `{ok, app, version, build}` (liveness probe) |
 | `/api/cluster/power` | GET | → `{state, vms[], last_ready_at, active_job?, detail?}` |
-| `/api/cluster/power` | POST | `{action: start\|stop\|restart}` → `202 {job_id, action}` (409 se outro job/sessão estiver ativo) |
-| `/api/cluster/health` | GET | → nós (Ready, IP, SSH), `kubectl_ok`, addons, `baseline_files`, `bootstrap_plan` |
-| `/api/cluster/setup-ssh` | POST | `{password?}` → bootstrap: chave + ssh-config + kubeconfig dedicado |
-| `/api/cluster/sync-profile` | POST | → sincroniza o perfil de exame nos nós (`{ok, nodes}`) |
+| `/api/cluster/power` | POST | `{action: start\|stop\|restart}` → `202 {job_id, action}` (409 if another job/session is active) |
+| `/api/cluster/health` | GET | → nodes (Ready, IP, SSH), `kubectl_ok`, addons, `baseline_files`, `bootstrap_plan` |
+| `/api/cluster/setup-ssh` | POST | `{password?}` → bootstrap: key + ssh-config + dedicated kubeconfig |
+| `/api/cluster/sync-profile` | POST | → syncs the exam profile to the nodes (`{ok, nodes}`) |
 | `/api/cluster/install-addons` | POST | → `{ok, results}` (metrics-server, Gateway API, local-path, etcdutl) |
-| `/api/cluster/reset-baseline` | POST | → `{started, mode}`; resultado no SSE `cluster.reset.done {ok, level, drift, nodes_ready}` (409 se ocupado) |
+| `/api/cluster/reset-baseline` | POST | → `{started, mode}`; result in the SSE `cluster.reset.done {ok, level, drift, nodes_ready}` (409 if busy) |
 | **Backup** | | |
-| `/api/backup/status` | GET | → status do snapshot portável |
-| `/api/backup/create` | POST | → cria `backups/cka_arena_backup.db` + `manifest.json` |
-| **Geração (Studio)** | | |
-| `/api/generate` | POST | `{domains[], subtopics?, difficulty, count (1–15), focus_hint?, target_archetype_id?, target_archetypes?}` → `202 {job_id, generation_request_id}` (cluster `ready` obrigatório; 409 se ocupado) |
+| `/api/backup/status` | GET | → portable snapshot status |
+| `/api/backup/create` | POST | → creates `backups/cka_arena_backup.db` + `manifest.json` |
+| **Generation (Studio)** | | |
+| `/api/generate` | POST | `{domains[], subtopics?, difficulty, count (1–15), focus_hint?, target_archetype_id?, target_archetypes?}` → `202 {job_id, generation_request_id}` (cluster `ready` required; 409 if busy) |
 | `/api/generate/cancel` | POST | → `{cancelled}` |
-| `/api/generate/fill-gaps` | POST | `?max_count=` → `202` (prioriza células vazias da grade domínio×dificuldade) |
-| `/api/generate/fill-archetypes` | POST | `?max_count=` → `202` (arquétipos ainda sem questão) |
+| `/api/generate/fill-gaps` | POST | `?max_count=` → `202` (prioritizes empty cells of the domain×difficulty grid) |
+| `/api/generate/fill-archetypes` | POST | `?max_count=` → `202` (archetypes still without a question) |
 | `/api/generate/archetype/{archetype_id}` | POST | `?difficulty=` → `202` |
-| `/api/generate/status` | GET | → snapshot do job atual/último (recuperação em reload) |
-| **Prontidão e telemetria** | | |
-| `/api/readiness` | GET | → veredito Go/No-Go (4 critérios + score) e Skill Tree |
-| `/api/study-plan/today` | GET | → plano de estudo diário |
-| `/api/telemetry` | GET | → telemetria por domínio + saúde do pipeline |
-| **Banco de questões** | | |
-| `/api/bank/coverage` | GET | → grade domínio×dificuldade |
-| `/api/bank/preview` | GET | `?count=&domains=&difficulty=&mode=&variant=&archetype_id=` → alocação largest-remainder + fallbacks |
-| `/api/bank/questions` | GET | `?state=&domain=&difficulty=&source=&q=&limit=&offset=` → lista com filtros |
-| `/api/bank/questions/{id}` | GET | → envelope + resultado do probe + metadados |
-| `/api/bank/questions/{id}/reprobe` · `/repair` · `/polish` | POST | → revalida no cluster · repara com IA · reescreve o enunciado |
-| `/api/bank/questions/{id}/feedback` | POST | `{reason_code, note}` → feedback que realimenta planner e revisor |
-| `/api/bank/questions/{id}/retire` | POST | `{reason, reason_code}` → sai da amostragem |
-| `/api/bank/questions/{id}` | DELETE | → remove a questão |
-| `/api/bank/audit` | POST | `{apply}` → audita (e opcionalmente aposenta) questões legadas |
+| `/api/generate/status` | GET | → snapshot of the current/last job (recovery on reload) |
+| **Readiness and telemetry** | | |
+| `/api/readiness` | GET | → Go/No-Go verdict (4 criteria + score) and Skill Tree |
+| `/api/study-plan/today` | GET | → daily study plan |
+| `/api/telemetry` | GET | → per-domain telemetry + pipeline health |
+| **Question bank** | | |
+| `/api/bank/coverage` | GET | → domain×difficulty grid |
+| `/api/bank/preview` | GET | `?count=&domains=&difficulty=&mode=&variant=&archetype_id=` → largest-remainder allocation + fallbacks |
+| `/api/bank/questions` | GET | `?state=&domain=&difficulty=&source=&q=&limit=&offset=` → list with filters |
+| `/api/bank/questions/{id}` | GET | → envelope + probe result + metadata |
+| `/api/bank/questions/{id}/reprobe` · `/repair` · `/polish` | POST | → revalidates on the cluster · repairs with AI · rewrites the question prompt |
+| `/api/bank/questions/{id}/feedback` | POST | `{reason_code, note}` → feedback that feeds back the planner and reviewer |
+| `/api/bank/questions/{id}/retire` | POST | `{reason, reason_code}` → leaves the sampling pool |
+| `/api/bank/questions/{id}` | DELETE | → deletes the question |
+| `/api/bank/audit` | POST | `{apply}` → audits (and optionally retires) legacy questions |
 | **Study Codex** | | |
-| `/api/study/overview` | GET | → progresso, XP, rank e streak |
-| `/api/study/topics/{topic_id}` | GET | → teoria, playbook, cheatsheet e quiz do tópico |
+| `/api/study/overview` | GET | → progress, XP, rank, and streak |
+| `/api/study/topics/{topic_id}` | GET | → topic theory, playbook, cheatsheet, and quiz |
 | `/api/study/topics/{topic_id}/stage` | POST | `{stage: theory\|practice\|cheatsheet, done}` |
 | `/api/study/topics/{topic_id}/quiz` | POST | `{choice_index, question_index}` |
 | `/api/study/drill` | GET | `?domain=&limit=` → drill deck |
-| **Sessões** | | |
-| `/api/practice` | POST | `{count, domains?, difficulty?, mode?, variant?, archetype_id?, allow_destructive?, strict_psi?}` → `201` (sorteio + aplica Q1; 409 se ocupado) |
-| `/api/sessions/active` · `/api/sessions/{id}` | GET | → sessão corrente (item ativo, envelope, contadores) |
-| `/api/sessions/history` | GET | `?limit=` → sessões finalizadas |
-| `/api/sessions/{id}/review` | GET | → revisão da sessão, questão a questão |
-| `/api/sessions/{id}/check` · `/next` · `/prev` · `/skip` · `/reset` | POST | Ciclo de prática (contrato em `LLM_PIPELINE_SPEC.md` §5) |
-| `/api/sessions/{id}/select/{item_id}` · `/flag/{item_id}` | POST | Navegação livre e *flag for review* (simulados) |
-| `/api/sessions/{id}/hint` | POST | `{level: 1..3}` → dica progressiva |
-| `/api/sessions/{id}/postmortem/{item_id}` | GET | → análise de abordagem e ritmo |
-| `/api/sessions/{id}/items/{item_id}/state` | PUT | `{notes_text?, checked_tasks?}` → notepad e checklist |
-| `/api/sessions/{id}/retire` | POST | `{reason, reason_code}` → aposenta a questão ativa |
-| `/api/sessions/{id}/finish` | POST | `{reset: fast\|baseline}` → resumo + limpeza L1/L2 |
-| **Preferências** | | |
+| **Sessions** | | |
+| `/api/practice` | POST | `{count, domains?, difficulty?, mode?, variant?, archetype_id?, allow_destructive?, strict_psi?}` → `201` (draw + applies Q1; 409 if busy) |
+| `/api/sessions/active` · `/api/sessions/{id}` | GET | → current session (active item, envelope, counters) |
+| `/api/sessions/history` | GET | `?limit=` → finished sessions |
+| `/api/sessions/{id}/review` | GET | → session review, question by question |
+| `/api/sessions/{id}/check` · `/next` · `/prev` · `/skip` · `/reset` | POST | Practice loop (contract in `LLM_PIPELINE_SPEC.md` §5) |
+| `/api/sessions/{id}/select/{item_id}` · `/flag/{item_id}` | POST | Free navigation and *flag for review* (mock exams) |
+| `/api/sessions/{id}/hint` | POST | `{level: 1..3}` → progressive hint |
+| `/api/sessions/{id}/postmortem/{item_id}` | GET | → approach and pacing analysis |
+| `/api/sessions/{id}/items/{item_id}/state` | PUT | `{notes_text?, checked_tasks?}` → notepad and checklist |
+| `/api/sessions/{id}/retire` | POST | `{reason, reason_code}` → retires the active question |
+| `/api/sessions/{id}/finish` | POST | `{reset: fast\|baseline}` → summary + L1/L2 cleanup |
+| **Preferences** | | |
 | `/api/settings/preferences` | GET/PUT | `{exam_target_date?, strict_psi_default?, allow_destructive_practice?}` |
 | **Terminal** | | |
 | `/api/terminal/tabs` | POST | `{preset: host\|node, node?, strict_psi?}` → `201 {tab_id}` |
-| `/api/terminal/tabs` | GET | → lista de PTYs vivos (reconnect) |
-| `/api/terminal/tabs/{tab_id}` | DELETE | → fecha a aba e o PTY |
-| `/ws/terminal/{tab_id}` | WS | in: `{type: input\|resize, …}` · out: frames do PTY + `{type: exit}` |
+| `/api/terminal/tabs` | GET | → list of live PTYs (reconnect) |
+| `/api/terminal/tabs/{tab_id}` | DELETE | → closes the tab and the PTY |
+| `/ws/terminal/{tab_id}` | WS | in: `{type: input\|resize, …}` · out: PTY frames + `{type: exit}` |
 | **LLM** | | |
-| `/api/llm/config` | GET/PUT | Config do provider editável na UI (chave **mascarada**, nunca retornada crua) |
-| `/api/llm/status` | GET | → provider/modelo ativos |
-| `/api/llm/test` | POST | `{...config?}` → ping real com latência |
-| **Eventos** | | |
+| `/api/llm/config` | GET/PUT | Provider config editable in the UI (key **masked**, never returned raw) |
+| `/api/llm/status` | GET | → active provider/model |
+| `/api/llm/test` | POST | `{...config?}` → real ping with latency |
+| **Events** | | |
 | `/api/events` | SSE | `cluster.power.state_changed`, `cluster.power.progress`, `cluster.reset.done`, `generation.progress` (A–E/publish), `generation.heartbeat`, `generation.snapshot`, `generation.done` |
 
-- Regras transversais: tudo JSON; erros seguem `{error: {code, message, detail?}}`; operações que disputam o cluster (prática, geração, reset, power) passam pelo `ClusterLease` e devolvem `409` quando ocupado; `CKA_ARENA_TOKEN`, quando definido, protege `/api/*` (exceto `/api/events`) — ver §10.
-- Endpoints de Check/Next da sessão ativa (`POST /api/sessions/{id}/check`, `/next`, `/skip`, `/reset`) seguem o ciclo do `UX_UI_SPEC.md` §3 e o contrato de avaliação do `LLM_PIPELINE_SPEC.md` §5.
+- Cross-cutting rules: everything JSON; errors follow `{error: {code, message, detail?}}`; operations that contend for the cluster (practice, generation, reset, power) go through the `ClusterLease` and return `409` when busy; `CKA_ARENA_TOKEN`, when set, protects `/api/*` (except `/api/events`) — see §10.
+- Check/Next endpoints of the active session (`POST /api/sessions/{id}/check`, `/next`, `/skip`, `/reset`) follow the loop in `UX_UI_SPEC.md` §3 and the grading contract in `LLM_PIPELINE_SPEC.md` §5.

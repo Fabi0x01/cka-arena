@@ -1,14 +1,14 @@
-# Especificação de Cenários e Contrato LLM (`ScenarioEnvelope`)
+# Scenario Specification & LLM Contract (`ScenarioEnvelope`)
 
-A LLM no **CKA Arena** tem um papel estrito: **arquiteta e geradora de cenários de laboratório/exame**. Ela nunca entrega a resposta durante a resolução e sua saída passa por um pipeline rígido de parsing, guardrails de segurança, aplicação real no cluster e sanity check antes de chegar à tela de estudo. A orquestração multi-estágio (**A** Normalizador → **B** Construtor → **C** Revisor → **D** Gates → **E** Prove-out com Solvability Probe), o banco de questões, o sorteio por percentuais da prova e o contrato formal de avaliação (PASS/FAIL/SKIP/ERROR) estão especificados em [`LLM_PIPELINE_SPEC.md`](./LLM_PIPELINE_SPEC.md).
+The LLM in **CKA Arena** plays a strict role: **architect and generator of lab/exam scenarios**. It never delivers the answer during solving, and its output goes through a rigid pipeline of parsing, security guardrails, real application to the cluster, and a sanity check before reaching the study screen. The multi-stage orchestration (**A** Normalizer → **B** Builder → **C** Reviewer → **D** Gates → **E** Prove-out with Solvability Probe), the question bank, the exam-weight draw, and the formal evaluation contract (PASS/FAIL/SKIP/ERROR) are specified in [`LLM_PIPELINE_SPEC.md`](./LLM_PIPELINE_SPEC.md).
 
-> **Documento de referência.** O contrato vivo é o modelo Pydantic em `app/models.py` e os gates em `app/pipeline/gates.py`; o prompt real (em inglês) está em `app/pipeline/prompts.py`. Onde divergir, o código prevalece.
+> **Reference document.** The living contract is the Pydantic model in `app/models.py` and the gates in `app/pipeline/gates.py`; the actual prompt (in English) is in `app/pipeline/prompts.py`. Where they diverge, the code prevails.
 
 ---
 
-## 1. Contrato JSON Estrito (`ScenarioEnvelope v1.2`)
+## 1. Strict JSON Contract (`ScenarioEnvelope v1.2`)
 
-A LLM deve retornar **exclusivamente um objeto JSON válido** seguindo este schema (validado via `Pydantic` em `app/models.py`; os campos e tipos do modelo têm precedência sobre o exemplo). Exemplo abreviado — manifestos cortados com `...` — baseado no seed `scenarios/seed/sn-networkpolicy-dns.json`, que é a referência completa:
+The LLM must return **exclusively a valid JSON object** following this schema (validated via `Pydantic` in `app/models.py`; the model's fields and types take precedence over the example). Abbreviated example — manifests cut with `...` — based on the seed `scenarios/seed/sn-networkpolicy-dns.json`, which is the complete reference:
 
 ```json
 {
@@ -106,141 +106,141 @@ A LLM deve retornar **exclusivamente um objeto JSON válido** seguindo este sche
 }
 ```
 
-### 1.1 Extensões do Envelope v1.1 (pipeline + banco)
+### 1.1 Envelope v1.1 Extensions (pipeline + bank)
 
-- **`solution` (bloco obrigatório):** manifests YAML e/ou comandos que resolvem o cenário de forma **automatizada** (aplicáveis via `kubectl apply`/`exec` sem humana no loop). É o insumo do **Solvability Probe** (Estágio E): a plataforma aplica o `solution` num clone de prova e exige que 100% dos checks fiquem `PASS` **antes** da questão entrar no banco — elimina questões insolúveis. A prosa didática continua em `reference_solution`.
-- **Imutabilidade pós-publicação:** publicado no banco (`bank_questions.state = published`), o envelope não muda mais (`envelope_hash`); correções geram nova versão (`supersedes_question_id`) e a antiga é aposentada.
-- **Dedup semântico:** fingerprint de `(domain, subtopics ordenados, título normalizado, hash dos manifests do setup)` — colisão com questão `published` descarta a nova (banco não enche de clones).
-- **`destructive` (flag booleana, default `false` — decisão D2):** obrigatória para todo cenário cuja resolução altera estado global do cluster (`etcdctl snapshot restore`, `kubeadm certs renew`/`upgrade`, restart do apiserver). O Gate D rejeita operações destrutivas não declaradas; cenários `destructive: true` ficam fora da prática por padrão (entram em `mock_exam`, ou com opt-in explícito via `allow_destructive`) e uma sessão que os contenha termina com **L2 (clean reset)**, porque o estado não volta ao limpo via L0/L1.
-- **`hints` e `fast_solution_commands` (v1.2):** pelo menos 2 dicas progressivas sem spoiler (nível 1: onde inspecionar; nível 2: conceito ou spec relevante) e atalhos imperativos do exam shell — alimentam o Hint Drawer e o Speed Coach.
-- **`archetype_id`:** arquétipo do currículo (`app/curriculum.py`) a que a questão pertence — alimenta Skill Tree, repetição espaçada e o Slot Planner.
-- **`checks[].weight_ratio`:** peso relativo de cada check no crédito parcial da questão (simulados).
-- **`setup.commands`, `solution.node_commands` e `cleanup.commands`:** completam o contrato original, que só previa `manifests`, `setup.node_commands` e o legado `cleanup.kubectl_commands` (ainda aceito).
+- **`solution` (mandatory block):** YAML manifests and/or commands that solve the scenario in an **automated** way (applicable via `kubectl apply`/`exec` without a human in the loop). It is the input of the **Solvability Probe** (Stage E): the platform applies the `solution` to an exam clone and requires 100% of the checks to be `PASS` **before** the question enters the bank — eliminates unsolvable questions. Didactic prose remains in `reference_solution`.
+- **Immutability after publication:** once published to the bank (`bank_questions.state = published`), the envelope no longer changes (`envelope_hash`); corrections generate a new version (`supersedes_question_id`) and the old one is retired.
+- **Semantic dedup:** fingerprint of `(domain, sorted subtopics, normalized title, hash of the setup manifests)` — collision with a `published` question discards the new one (the bank doesn't fill up with clones).
+- **`destructive` (boolean flag, default `false` — decision D2):** mandatory for every scenario whose solution changes global cluster state (`etcdctl snapshot restore`, `kubeadm certs renew`/`upgrade`, apiserver restart). Gate D rejects undeclared destructive operations; `destructive: true` scenarios stay out of Practice by default (they go into `mock_exam`, or with explicit opt-in via `allow_destructive`) and a session containing them ends with **L2 (clean reset)**, because state cannot be restored via L0/L1.
+- **`hints` and `fast_solution_commands` (v1.2):** at least 2 progressive hints without spoilers (level 1: where to inspect; level 2: relevant concept or spec) and imperative shortcuts for the exam shell — they feed the Hint Drawer and the Speed Coach.
+- **`archetype_id`:** the curriculum archetype (`app/curriculum.py`) the question belongs to — feeds the Skill Tree, spaced repetition, and the Slot Planner.
+- **`checks[].weight_ratio`:** relative weight of each check in the question's partial credit (mock exams).
+- **`setup.commands`, `solution.node_commands` and `cleanup.commands`:** complete the original contract, which only provided `manifests`, `setup.node_commands` and the legacy `cleanup.kubectl_commands` (still accepted).
 
-### 1.2 Formato Exato de Prova (`prompt` em inglês — anatomia killer.sh / PSI Bridge)
+### 1.2 Exact Exam Format (`prompt` in English — killer.sh / PSI Bridge anatomy)
 
-> Decisão (Revisão 3): **o sistema é 100% inglês** — a prova CKA é em inglês e ler tarefas em inglês faz parte do treino. O campo `prompt` segue a anatomia do exame real, espelhando o simulador oficial [killer.sh](https://killer.sh/cka) (incluso na compra da prova) e o delivery PSI Bridge:
+> Decision (Revision 3): **the system is 100% English** — the CKA exam is in English and reading tasks in English is part of the training. The `prompt` field follows the anatomy of the real exam, mirroring the official simulator [killer.sh](https://killer.sh/cka) (included with the exam purchase) and the PSI Bridge delivery:
 
 ```text
-Fix Node & Scale Deployment                 ← título curto imperativo (3–6 palavras)
-Task weight: 8%                            ← peso simulado da questão
-Use context: kubectl config use-context cka← sempre presente (era context_command)
+Fix Node & Scale Deployment                 ← short imperative title (3–6 words)
+Task weight: 8%                            ← the question's simulated weight
+Use context: kubectl config use-context cka← always present (used to be context_command)
 
 A Deployment `web-api` in namespace `prod-checkout` is running only 1 of its 3
-desired replicas.                            ← contexto: 1–2 frases no presente,
-                                              sintomas observáveis — NUNCA a causa
-                                              nem a solução
+desired replicas.                            ← context: 1–2 sentences in the present,
+                                              observable symptoms — NEVER the cause
+                                              nor the fix
 Perform the following tasks:
 1. Restore the `kubelet` service on `node01` until the node reports `Ready`.
 2. Scale `web-api` to `3` replicas in `prod-checkout`.
 3. Pin all `web-api` pods to `node01` using `nodeSelector`.
 
-Do not modify any resource outside the mentioned namespaces.   ← restrições
+Do not modify any resource outside the mentioned namespaces.   ← constraints
 ```
 
-**Voz do exame (obrigatória):** imperativo direto (`Create`, `Scale`, `Fix`, `Save`, `Copy`); neutro e sem dicas de solução nem justificativas; todo identificador crítico em `backticks` (vira Copy-Pill); nenhuma menção aos checks; inglês técnico claro; restrições explícitas (`Do not modify/delete ...`, namespace alvo, naming, caminhos de saída em `/opt/...`).
+**Exam voice (mandatory):** direct imperative (`Create`, `Scale`, `Fix`, `Save`, `Copy`); neutral, with no solution hints and no justifications; every critical identifier in `backticks` (becomes a Copy-Pill); no mention of the checks; clear technical English; explicit restrictions (`Do not modify/delete ...`, target namespace, naming, output paths under `/opt/...`).
 
 ---
 
-## 2. Catálogo de Checks Determinísticos Suportados (`validator.py`)
+## 2. Supported Deterministic Check Catalog (`validator.py`)
 
-O usuário nunca é avaliado por uma LLM durante o clique em **Check** — a verificação deve ser **100% determinística, rápida (< 5s no total) e imparcial**, igual ao motor de avaliação da prova real. A semântica formal — status `PASS`/`FAIL`/`SKIP`/`ERROR`, política de retry (FAIL nunca re-executa sozinho; ERROR sim), veredito *all-or-nothing* por questão, evidência por item e settle window — está contratada em `LLM_PIPELINE_SPEC.md` §5.
+The user is never evaluated by an LLM when clicking **Check** — verification must be **100% deterministic, fast (< 5s total), and impartial**, like the real exam's evaluation engine. The formal semantics — status `PASS`/`FAIL`/`SKIP`/`ERROR`, retry policy (FAIL never re-runs on its own; ERROR does), per-question *all-or-nothing* verdict, per-item evidence, and settle window — are contracted in `LLM_PIPELINE_SPEC.md` §5.
 
-| `type` | O que verifica | Parâmetros (`params`) | Uso típico na CKA |
+| `type` | What it verifies | Parameters (`params`) | Typical CKA use |
 | :--- | :--- | :--- | :--- |
-| `kubectl_resource_exists` | Existência de qualquer objeto da API K8s (`Deployment`, `NetworkPolicy`, `HTTPRoute`, `PVC`, `Role`, etc.) | `kind`, `name`, `namespace` (opcional) | Confirmar criação e nome exato do recurso. |
-| `kubectl_jsonpath` | Compara valor extraído via JSONPath com o esperado (`equals`, `equals_int`, `contains`, `not_contains`, `gte`, `regex`, `len_gte`, `empty`, `not_empty`, `all_match`) | `kind`, `name` **ou** `label_selector`, `namespace`, `jsonpath`, `operator`, `expected` | Verificar `replicas`, `image`, `storageClassName`, `tolerations`, `serviceAccountName`, `accessModes`, `type: NodePort`. Em modo LIST (sem `name`, com `label_selector`) o jsonpath parte de `{.items[*].…}`. |
-| `pod_status_ready` | Confirma que pelo menos `min_ready` pods correspondentes ao seletor estão `Running` e `Ready=True` | `namespace`, `label_selector`, `min_ready` | Validar que pods saíram de `Pending`/`CrashLoopBackOff`. |
-| `node_status_ready` | Confirma que o nó especificado está com condição `Ready=True` | `node_name` (`controlplane`, `node01`, `node02`) | Cenários de Troubleshooting de `kubelet` ou nó em `NotReady`. |
-| `kubectl_auth_can_i` | Executa `kubectl auth can-i <verb> <resource> --as=system:serviceaccount:<ns>:<sa>` | `service_account`, `namespace`, `verb`, `resource`, `target_namespace`, `expected_allowed` (`true`/`false`) | Questões de RBAC (`Role`, `ClusterRole`, `RoleBinding`). |
-| `pod_exec_exit_zero` | Executa comando dentro de um pod vivo (ou pod efêmero `curlimages/curl` / `busybox`) e valida exit code `0` e opcionalmente `stdout_contains` | `namespace`, `label_selector` (ou `ephemeral_probe: true`), `command`, `stdout_contains` | Testar conectividade real entre pods, Service DNS, `NetworkPolicy` (permitir quem deve passar e **negar quem não deve**), `HTTPRoute`/`Ingress`. |
-| `pod_exec_must_fail` | Garante que um comando de conexão falha (timeout/exit != 0) | `namespace`, `label_selector`, `command` | Prova negativa obrigatória em `NetworkPolicy` (confirmar que `frontend` **não** acessa `postgres` diretamente). |
-| `node_command_exit_zero` | Executa comando no nó especificado (SSH no Multipass, `docker exec` no kind) e verifica exit code `0` / `stdout_contains` | `node`, `command`, `stdout_contains` | Verificar `systemctl is-active kubelet`, arquivos estáticos, ou arquivo de backup `etcd` salvo em `/opt/backup/etcd.db`. |
-| `host_file_contains` | Verifica existência de arquivo salvo no host ou nó (ex.: saída de `kubectl get ... > /tmp/result.txt`) | `location` (`host` \| `controlplane` \| `node01` \| `node02`), `path`, `regex_patterns` | Questões clássicas da CKA que pedem para salvar nomes de nós/pods ordenados em um arquivo específico. |
-| `helm_release_state` | Verifica via `helm list -n <ns> -o json` o status `deployed`, chart e versão/revisão | `namespace`, `release_name`, `expected_status`, `min_revision` | Questões de Helm (install, upgrade, rollback). |
-| `service_endpoints_ready` | Pelo menos `min_ready_addresses` endpoints prontos atrás do Service (via `EndpointSlice`, com fallback para `Endpoints`) | `namespace`, `service_name`, `min_ready_addresses` | Validar Services sem depender de `jsonpath` sobre IPs. |
-| `deployment_rollout_ready` | Deployment com rollout concluído e `min_ready_replicas` prontas (opcionalmente com a imagem esperada) | `namespace`, `name`, `min_ready_replicas`, `expected_image` | Validar escalonamento, correção de imagem e rollouts. |
-| `pvc_bound` | PVC em fase `Bound`, opcionalmente com StorageClass e capacidade mínimas | `namespace`, `name`, `storage_class`, `min_storage` | Validar ligação de PVC e StorageClass dinâmica. |
+| `kubectl_resource_exists` | Existence of any K8s API object (`Deployment`, `NetworkPolicy`, `HTTPRoute`, `PVC`, `Role`, etc.) | `kind`, `name`, `namespace` (optional) | Confirm resource creation and exact name. |
+| `kubectl_jsonpath` | Compares a JSONPath-extracted value against the expectation (`equals`, `equals_int`, `contains`, `not_contains`, `gte`, `regex`, `len_gte`, `empty`, `not_empty`, `all_match`) | `kind`, `name` **or** `label_selector`, `namespace`, `jsonpath`, `operator`, `expected` | Verify `replicas`, `image`, `storageClassName`, `tolerations`, `serviceAccountName`, `accessModes`, `type: NodePort`. In LIST mode (no `name`, with `label_selector`) the jsonpath starts at `{.items[*].…}`. |
+| `pod_status_ready` | Confirms that at least `min_ready` pods matching the selector are `Running` and `Ready=True` | `namespace`, `label_selector`, `min_ready` | Validate that pods left `Pending`/`CrashLoopBackOff`. |
+| `node_status_ready` | Confirms the specified node has condition `Ready=True` | `node_name` (`controlplane`, `node01`, `node02`) | `kubelet` troubleshooting or node in `NotReady` scenarios. |
+| `kubectl_auth_can_i` | Runs `kubectl auth can-i <verb> <resource> --as=system:serviceaccount:<ns>:<sa>` | `service_account`, `namespace`, `verb`, `resource`, `target_namespace`, `expected_allowed` (`true`/`false`) | RBAC questions (`Role`, `ClusterRole`, `RoleBinding`). |
+| `pod_exec_exit_zero` | Runs a command inside a live pod (or an ephemeral `curlimages/curl` / `busybox` pod) and validates exit code `0` plus optional `stdout_contains` | `namespace`, `label_selector` (or `ephemeral_probe: true`), `command`, `stdout_contains` | Test real pod-to-pod connectivity, Service DNS, `NetworkPolicy` (allow what must pass and **deny what must not**), `HTTPRoute`/`Ingress`. |
+| `pod_exec_must_fail` | Ensures a connectivity command fails (timeout/exit != 0) | `namespace`, `label_selector`, `command` | Mandatory negative check in `NetworkPolicy` (confirm `frontend` **cannot** reach `postgres` directly). |
+| `node_command_exit_zero` | Runs a command on the specified node (SSH on Multipass, `docker exec` on kind) and checks exit code `0` / `stdout_contains` | `node`, `command`, `stdout_contains` | Verify `systemctl is-active kubelet`, static files, or an `etcd` backup file saved to `/opt/backup/etcd.db`. |
+| `host_file_contains` | Checks a file saved on the host or node (e.g. output of `kubectl get ... > /tmp/result.txt`) | `location` (`host` \| `controlplane` \| `node01` \| `node02`), `path`, `regex_patterns` | Classic CKA questions asking to save sorted node/pod names to a specific file. |
+| `helm_release_state` | Checks via `helm list -n <ns> -o json` the status `deployed`, chart, and version/revision | `namespace`, `release_name`, `expected_status`, `min_revision` | Helm questions (install, upgrade, rollback). |
+| `service_endpoints_ready` | At least `min_ready_addresses` ready endpoints behind the Service (via `EndpointSlice`, with fallback to `Endpoints`) | `namespace`, `service_name`, `min_ready_addresses` | Validate Services without depending on `jsonpath` over IPs. |
+| `deployment_rollout_ready` | Deployment with completed rollout and `min_ready_replicas` ready (optionally with the expected image) | `namespace`, `name`, `min_ready_replicas`, `expected_image` | Validate scaling, image correctness, and rollouts. |
+| `pvc_bound` | PVC in `Bound` phase, optionally with minimum StorageClass and capacity | `namespace`, `name`, `storage_class`, `min_storage` | Validate PVC binding and dynamic StorageClass. |
 
 ---
 
-## 3. Guardrails & Loop de Auto-Reparo (`Self-Healing Pipeline`)
+## 3. Guardrails & Self-Repair Loop (`Self-Healing Pipeline`)
 
-LLMs ocasionalmente alucinam APIs obsoletas (ex.: `extensions/v1beta1`), nomes de imagens inexistentes em `arm64`, ou geram um cenário cujo `setup` falha ou cujos `checks` já nascem passando. Para garantir confiabilidade máxima:
+LLMs occasionally hallucinate obsolete APIs (e.g. `extensions/v1beta1`), image names that don't exist on `arm64`, or produce a scenario whose `setup` fails or whose `checks` are born passing. To guarantee maximum reliability:
 
-### Gates Determinísticos (Estágios D + E.1 do Pipeline A→E)
+### Deterministic Gates (Stages D + E.1 of Pipeline A→E)
 
-> O pipeline completo tem 5 estágios — **A** Normalizador · **B** Construtor · **C** Revisor (agentes LLM; B usa modelo principal, A/C usam flash) · **D** Gates de código abaixo (itens 1–3) · **E** Prove-out no cluster (item 4: sanity + **Solvability Probe**: aplica `solution` e exige 100% PASS) — orquestrados **sem framework de agentes** (decisão fundamentada em `LLM_PIPELINE_SPEC.md` §1). O item 5 é o loop de auto-reparo que devolve o erro exato ao Construtor (≤ 2 retries).
+> The full pipeline has 5 stages — **A** Normalizer · **B** Builder · **C** Reviewer (LLM agents; B uses the main model, A/C use flash) · **D** code gates below (items 1–3) · **E** prove-out on the cluster (item 4: sanity + **Solvability Probe**: applies the `solution` and requires 100% PASS) — orchestrated **without an agent framework** (decision grounded in `LLM_PIPELINE_SPEC.md` §1). Item 5 is the self-repair loop that returns the exact error to the Builder (≤ 2 retries).
 
 1. **Schema & Syntax Gate:**
-   - Todos os strings em `setup.manifests` e `solution.manifests` passam por `yaml.safe_load_all()`.
-   - Whitelist de imagens (`app/pipeline/gates.py`): só repositórios conhecidos e tags fixas; o laboratório pode ser `arm64` ou `amd64`, então use imagens multi-arch. Sugestões do prompt: `nginx:1.27-alpine`, `busybox:1.36`, `redis:7-alpine`, `postgres:16-alpine`, `alpine:3.20`, `httpd:2.4-alpine`, `curlimages/curl:8.10.1`, `registry.k8s.io/pause:3.10`.
+   - All strings in `setup.manifests` and `solution.manifests` go through `yaml.safe_load_all()`.
+   - Image whitelist (`app/pipeline/gates.py`): only known repositories and pinned tags; the lab may be `arm64` or `amd64`, so use multi-arch images. Prompt suggestions: `nginx:1.27-alpine`, `busybox:1.36`, `redis:7-alpine`, `postgres:16-alpine`, `alpine:3.20`, `httpd:2.4-alpine`, `curlimages/curl:8.10.1`, `registry.k8s.io/pause:3.10`.
 2. **Security Blocklist Gate:**
-   - Rejeita comandos SSH sem `backup_paths` declarado quando tocarem diretórios de sistema.
-   - **Declaração de destrutividade (D2):** operações como `etcdctl snapshot restore`, `kubeadm certs renew/upgrade` ou restart do `kube-apiserver` só passam com `destructive: true` declarado; sem a flag, o envelope é rejeitado com erro explícito.
-   - Rejeita comandos perigosos (`rm -rf /`, `kubeadm reset`, alterações fora de `/etc/kubernetes`, `/var/lib/kubelet`, `/opt/cka`, `/tmp`).
+   - Rejects SSH commands without a declared `backup_paths` when they touch system directories.
+   - **Destructiveness declaration (D2):** operations like `etcdctl snapshot restore`, `kubeadm certs renew/upgrade` or restarting the `kube-apiserver` only pass with `destructive: true` declared; without the flag, the envelope is rejected with an explicit error.
+   - Rejects dangerous commands (`rm -rf /`, `kubeadm reset`, changes outside `/etc/kubernetes`, `/var/lib/kubelet`, `/opt/cka`, `/tmp`).
 3. **Dry-Run Server Gate:**
-   - Quando o `kube-apiserver` não é o alvo da quebra, roda `kubectl apply --dry-run=server -f -` nos manifests de `setup` para garantir que a API `v1.37.2` aceita exatamente aqueles campos (`apiVersion`, `spec`).
+   - When the `kube-apiserver` is not the target of the breakage, runs `kubectl apply --dry-run=server -f -` on the `setup` manifests to ensure API `v1.37.2` accepts exactly those fields (`apiVersion`, `spec`).
 4. **Apply + Initial Fail Sanity Check:**
-   - Aplica o `setup` no cluster.
-   - Executa todos os `checks` imediatamente após o `setup`:
-     - **Regra de Ouro:** Pelo menos 1 check **DEVE falhar** antes do usuário começar! Se todos os checks já retornarem `PASS` no instante zero, o cenário está mal formulado e é descartado/regenerado automaticamente.
-5. **Auto-Reparo com Feedback (Max 2 retries):**
-   - Se os estágios 1, 3 ou 4 falharem, o backend faz rollback imediato do cenário parcial e envia o erro exato (`stderr` do `kubectl` ou motivo do Sanity Check) de volta à LLM solicitando apenas a correção do `ScenarioEnvelope`.
+   - Applies the `setup` to the cluster.
+   - Runs all `checks` immediately after the `setup`:
+     - **Golden Rule:** At least 1 check **MUST fail** before the user starts! If all checks already return `PASS` at instant zero, the scenario is poorly formulated and is discarded/regenerated automatically.
+5. **Self-Repair with Feedback (Max 2 retries):**
+   - If stages 1, 3 or 4 fail, the backend immediately rolls back the partial scenario and sends the exact error (`kubectl` `stderr` or the Sanity Check reason) back to the LLM, asking only for the corrected `ScenarioEnvelope`.
 
 ---
 
-## 4. Regras do System Prompt da LLM
+## 4. LLM System Prompt Rules
 
-> O prompt autoritativo (em inglês) é `BUILDER_SYSTEM` em `app/pipeline/prompts.py`, montado com os placeholders `{{TOPOLOGY}}`, `{{DIFFICULTY}}`, `{{BAND}}`, `{{SLOT_BRIEF}}` e `{{FEW_SHOT}}`. O bloco abaixo é uma tradução de referência das regras — não é o texto enviado ao modelo.
+> The authoritative prompt (in English) is `BUILDER_SYSTEM` in `app/pipeline/prompts.py`, assembled with the placeholders `{{TOPOLOGY}}`, `{{DIFFICULTY}}`, `{{BAND}}`, `{{SLOT_BRIEF}}` and `{{FEW_SHOT}}`. The block below is a reference rendering of the rules, not the text sent to the model.
 
 ```text
-Você é um Arquiteto Sênior de Exames da CNCF (criador de questões estilo Killer.sh e CKA oficial).
-Sua missão é gerar cenários práticos inéditos para execução em um cluster Kubernetes kubeadm REAL.
+You are a Senior CNCF Exam Architect (question author in the style of Killer.sh and the official CKA).
+Your mission is to generate original hands-on scenarios to be executed on a REAL kubeadm Kubernetes cluster.
 
-TOPOLOGIA REAL DO CLUSTER DO CANDIDATO:
-- Versão Kubernetes: <versão detectada em runtime>
-- Arquitetura dos Nós: <arquitetura> — USE APENAS IMAGENS MULTI-ARCH!
+CANDIDATE CLUSTER REAL TOPOLOGY:
+- Kubernetes version: <version detected at runtime>
+- Node architecture: <architecture> — USE MULTI-ARCH IMAGES ONLY!
 - Runtime: containerd
-- CNI: <CNI do laboratório>
-- Nós disponíveis:
-  1. controlplane (role: control-plane, IP: <ip-do-controlplane>)
-  2. node01 (role: worker, IP: <ip-do-node01>)
-  3. node02 (role: worker, IP: <ip-do-node02>)
-- Contexto kubectl: cka
-- Add-ons instalados dinamicamente: {{INSTALLED_ADDONS}}
+- CNI: <lab CNI>
+- Available nodes:
+  1. controlplane (role: control-plane, IP: <controlplane-ip>)
+  2. node01 (role: worker, IP: <node01-ip>)
+  3. node02 (role: worker, IP: <node02-ip>)
+- kubectl context: cka
+- Add-ons installed dynamically: {{INSTALLED_ADDONS}}
 
-REGRAS ESTRITAS DE CONSTRUÇÃO DO CENÁRIO:
+STRICT SCENARIO CONSTRUCTION RULES:
 1. **All user-facing text in English (exam voice):** `prompt`, check `description`, `failure_hint`, `docs_links` labels and `reference_solution` must be in clear, concise technical English — imperative, neutral, zero solution hints — mirroring the real CKA / killer.sh question voice (anatomy in §1.2). Use Kubernetes resource terms verbatim (`Pod`, `Deployment`, `NetworkPolicy`).
 2. Requested difficulty: {{DIFFICULTY}} — follow the measurable band of §5 exactly (requirements, resource kinds, traps, causal chain, checks, time target, weight); the Reviewer stage will reject scenarios outside the band:
    - `exam_standard`: 1–2 requirements, 1 namespace, no deliberate traps, single-step fix (target ≤ 4 min, weight 2–5).
    - `killer_hardcore`: 3–4 requirements, ≥ 1 fair trap (incompatible label selector, NetworkPolicy egress breaking DNS port 53, node taint, pre-existing broken manifest), diagnose-then-repair chain (target ≤ 7 min, weight 6–10).
    - `boss_fight`: multi-layer incident combining node infrastructure failure (kubelet/static pod/systemd via SSH) + dependent workload/network recovery, ≥ 2 traps, causal chain ≥ 3 (target ≤ 12 min, weight 11–16).
-3. Todo identificador crítico no enunciado (namespaces, nomes de recursos, portas, labels, caminhos de arquivo) DEVE estar entre crases (`exemplo`) e listado em `copy_tokens`.
-4. `setup` deve criar um ambiente realista (ou quebrado propositalmente) garantindo que os `checks` FALHEM antes da intervenção do candidato.
-5. Os `checks` devem testar o ESTADO RESULTANTE no cluster ou nó, aceitando qualquer forma válida que o candidato use para resolver (imperativo ou declarativo). Nunca exija que o candidato use um comando específico se o estado da API for equivalente.
-6. Todo comando em `setup.node_commands` que modifique arquivos do nó DEVE listar os caminhos originais em `backup_paths` para restauração automática.
-7. Nunca use namespaces `kube-system`, `default`, `kube-public` para criar novos workloads de aplicação; use namespaces temáticos dedicados (ex: `cka-alpha`, `payments`, `ingress-lab`) para facilitar limpeza. (Exceção: troubleshooting de CoreDNS ou static pods do control plane).
-8. Retorne APENAS JSON válido aderente ao schema `ScenarioEnvelope v1.2`. Não inclua texto fora do JSON.
-9. Operações de `etcd` (`etcdctl snapshot save/restore`, `ETCDCTL_API=3`) devem rodar SEMPRE no nó `controlplane` via `node_commands` com `node: controlplane` — nunca no host do candidato nem em workers. Use o binário `etcdctl` e os certificados do nó (`/etc/kubernetes/pki/etcd/`); o `etcdctl` por ventura instalado no host do candidato não participa dos checks.
-10. O bloco `solution` deve resolver o cenário de forma AUTOMATIZADA (manifests YAML e/ou comandos `kubectl` aplicáveis sem intervenção humana) — ele alimenta o Solvability Probe, que aplica a solução num clone de prova e exige 100% dos checks `PASS`. Prosa didática vai apenas em `reference_solution`.
+3. Every critical identifier in the question prompt (namespaces, resource names, ports, labels, file paths) MUST be in backticks (`example`) and listed in `copy_tokens`.
+4. `setup` must create a realistic (or deliberately broken) environment guaranteeing the `checks` FAIL before the candidate intervenes.
+5. The `checks` must test the RESULTING STATE on the cluster or node, accepting any valid form the candidate uses to solve (imperative or declarative). Never require the candidate to use a specific command when the API state is equivalent.
+6. Every command in `setup.node_commands` that modifies node files MUST list the original paths in `backup_paths` for automatic restoration.
+7. Never use the `kube-system`, `default`, `kube-public` namespaces to create new application workloads; use dedicated thematic namespaces (e.g. `cka-alpha`, `payments`, `ingress-lab`) to make cleanup easier. (Exception: CoreDNS troubleshooting or control-plane static pods).
+8. Return ONLY valid JSON adhering to the `ScenarioEnvelope v1.2` schema. Do not include text outside the JSON.
+9. `etcd` operations (`etcdctl snapshot save/restore`, `ETCDCTL_API=3`) must ALWAYS run on the `controlplane` node via `node_commands` with `node: controlplane` — never on the candidate host or on workers. Use the `etcdctl` binary and the node's certificates (`/etc/kubernetes/pki/etcd/`); any `etcdctl` installed on the candidate host does not participate in the checks.
+10. The `solution` block must solve the scenario in an AUTOMATED way (YAML manifests and/or `kubectl` commands applicable without human intervention) — it feeds the Solvability Probe, which applies the solution to an exam clone and requires 100% of the checks to `PASS`. Didactic prose goes only in `reference_solution`.
 ```
 
 ---
 
-## 5. Rubrica de Dificuldade Mensurável (níveis realmente distintos)
+## 5. Measurable Difficulty Rubric (genuinely distinct levels)
 
-> Requisito (Revisão 3): a diferença entre níveis **não é subjetiva** — é uma banda de complexidade medida direto do envelope e **enforçada no Estágio C** do pipeline: fora da banda em ≥ 2 eixos ⇒ `verdict: patch` com o delta explícito (ex.: *"`boss_fight` has only 2 requirements and 3 checks — needs 4–6 requirements and ≥ 6 checks"*). O Gate D também rejeita `boss_fight` sem `node_commands`/falha de infra.
+> Requirement (Revision 3): the difference between levels is **not subjective** — it is a complexity band measured directly from the envelope and **enforced at Stage C** of the pipeline: outside the band on ≥ 2 axes ⇒ `verdict: patch` with the explicit delta (e.g. *"`boss_fight` has only 2 requirements and 3 checks — needs 4–6 requirements and ≥ 6 checks"*). Gate D also rejects `boss_fight` without `node_commands`/infrastructure failure.
 
-| Eixo (medido no envelope) | `exam_standard` | `killer_hardcore` | `boss_fight` |
+| Axis (measured on the envelope) | `exam_standard` | `killer_hardcore` | `boss_fight` |
 | :--- | :--- | :--- | :--- |
-| Requisitos no `prompt` (bullets) | 1–2 | 3–4 | 4–6 |
-| Espécies de recurso (setup + solution) | 0–2 kinds | ≥ 2 kinds | ≥ 3 kinds + infra de nó |
-| Escopo | 0–1 namespace | 0–2 namespaces | multi-namespace **ou** falha de nó (kubelet / static pod / systemd) |
-| Armadilhas deliberadas (justas) | 0 | ≥ 1 (label mismatch, egress DNS 53, taint, manifesto quebrado pré-existente) | ≥ 2 |
-| Profundidade da cadeia causal | 1 (ação → resultado) | 2 (diagnosticar → reparar) | ≥ 3 (restaurar infra → workload dependente → validar) |
-| Checks | 2–3 | 4–6 | 6–10, incluindo ≥ 1 prova negativa |
-| Meta de tempo | ≤ 4 min | ≤ 7 min | ≤ 12 min |
-| Peso simulado (`weight`) | 2–5 | 6–10 | 11–16 |
+| Requirements in the `prompt` (bullets) | 1–2 | 3–4 | 4–6 |
+| Resource kinds (setup + solution) | 0–2 kinds | ≥ 2 kinds | ≥ 3 kinds + node infrastructure |
+| Scope | 0–1 namespace | 0–2 namespaces | multi-namespace **or** node failure (kubelet / static pod / systemd) |
+| Deliberate traps (fair) | 0 | ≥ 1 (label mismatch, egress DNS 53, taint, pre-existing broken manifest) | ≥ 2 |
+| Causal chain depth | 1 (action → result) | 2 (diagnose → repair) | ≥ 3 (restore infrastructure → dependent workload → validate) |
+| Checks | 2–3 | 4–6 | 6–10, including ≥ 1 negative check |
+| Time target | ≤ 4 min | ≤ 7 min | ≤ 12 min |
+| Mock exam weight (`weight`) | 2–5 | 6–10 | 11–16 |
 
-**Exemplo do que separa os níveis** (mesmo domínio, Services & Networking): `exam_standard` = "Create a Service `svc-a` of type NodePort `30080` for Deployment `frontend`"; `killer_hardcore` = o mesmo Service + NetworkPolicy que isola `backend` permitindo apenas `frontend` na `8080` **sem quebrar egress DNS 53** + salvar o manifesto em `/opt/cka/netpol.yaml`; `boss_fight` = kubelet do `node01` parado (SSH) + `frontend` preso em `ContainerCreating` + Service sem endpoints por label mismatch + NodePort exigido em nó específico via toleration.
+**Example of what separates the levels** (same domain, Services & Networking): `exam_standard` = "Create a Service `svc-a` of type NodePort `30080` for Deployment `frontend`"; `killer_hardcore` = the same Service + a NetworkPolicy that isolates `backend` allowing only `frontend` on `8080` **without breaking DNS egress 53** + saving the manifest to `/opt/cka/netpol.yaml`; `boss_fight` = `node01` kubelet stopped (SSH) + `frontend` stuck in `ContainerCreating` + Service without endpoints due to a label mismatch + NodePort required on a specific node via toleration.

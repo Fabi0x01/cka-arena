@@ -1,33 +1,33 @@
-# CKA Arena — Verdade de Produto
+# CKA Arena — Product Truth
 
-> Contexto durável para design e produto. Fonte única de verdade sobre o que a plataforma é; decisões visuais vivem em [`DESIGN.md`](./DESIGN.md).
+> Durable context for design and product. Single source of truth about what the platform is; visual decisions live in [`DESIGN.md`](./DESIGN.md).
 
-## O que é
+## What it is
 
-Plataforma local de treino prático para a prova **Certified Kubernetes Administrator (CKA)**, no estilo dos simuladores de prova, rodando contra um laboratório `kubeadm` real (três nós: VMs Multipass no macOS/Linux ou containers kind no WSL2/Linux com Docker). Quatro mecanismos se combinam:
+A local hands-on practice platform for the **Certified Kubernetes Administrator (CKA)** exam, in the style of exam simulators, running against a real `kubeadm` lab (three nodes: Multipass VMs on macOS/Linux or kind containers on WSL2/Linux with Docker). Four mechanisms combine:
 
-1. **Terminal real no browser** (PTY do host em xterm.js) ao lado da questão — resolver e pedir validação sem sair da janela.
-2. **Laboratório gerenciado pela plataforma** — botão liga/desliga, boot instrumentado e clean reset (L2) ao fim da sessão, preservando os addons.
-3. **Gerador de cenários com IA** — pipeline multi-estágio (planejamento por arquétipo → Construtor → gates determinísticos → Revisor → prove-out de solubilidade) que publica questões num banco; a prática sorteia pelos pesos oficiais da prova.
-4. **Pedagogia orientada por dados** — repetição espaçada por arquétipo, relatório de prontidão Go/No-Go, drills direcionados e Study Codex.
+1. **Real terminal in the browser** (host PTY in xterm.js) next to the question — solve and request validation without leaving the window.
+2. **Lab managed by the platform** — on/off button, instrumented boot and clean reset (L2) at the end of the session, preserving the addons.
+3. **AI scenario generator** — multi-stage pipeline (archetype planning → Builder → deterministic gates → Reviewer → solvability prove-out) that publishes questions to a question bank; practice draws them using the official exam weights.
+4. **Data-driven pedagogy** — spaced repetition by archetype, Go/No-Go readiness report, targeted drills and the Study Codex.
 
-## Para quem
+## Who it is for
 
-Um único usuário: quem está na frente da máquina — engenheiro experiente, estudando para a CKA em sessões de alta concentração (30–120 min), com o navegador em tela cheia ou quase. Não existe segundo usuário, não existe mobile real, não existe demo pública.
+A single user: whoever is in front of the machine — an experienced engineer, studying for the CKA in high-concentration sessions (30–120 min), with the browser in full screen or close to it. There is no second user, no real mobile, no public demo.
 
-## O que a superfície precisa provar
+## What the surface must prove
 
-- **Confiança operacional:** o usuário enuncia, resolve no terminal, clica em Check e acredita no veredito — a interface é o painel de controle de um cluster real, não um curso animado.
-- **Fluidez sem atrito:** cada segundo de interação é custo de estudo; nada de animação decorativa, carregamento lento ou mudança de contexto entre telas.
-- **Estado sempre visível:** cluster (ligado/desligado/degradado), questão (fila, timer, check), sessão (progresso, fim, limpeza).
+- **Operational trust:** the user reads the question prompt, solves it in the terminal, clicks Check and believes the verdict — the interface is the control panel of a real cluster, not an animated course.
+- **Frictionless flow:** every second of interaction is study cost; no decorative animation, slow loading or context switching between screens.
+- **State always visible:** cluster (on/off/degraded), question (queue, timer, check), session (progress, end, cleanup).
 
-## Modo de superfície
+## Surface mode
 
-**Operate** — ferramenta de alta concentração. Escaneabilidade, consistência e expectativas nativas acima de expressão; a marca vive em detalhes precisos.
+**Operate** — a high-concentration tool. Scannability, consistency and native expectations above expression; the brand lives in precise details.
 
-## Compromissos de marca
+## Brand commitments
 
-- Identidade visual **Orbital Control Console**: console de missão sobre superfícies anodizadas escuras, hierarquia por degraus de luminância e vidro translúcido reservado às camadas superiores (contrato completo em [`DESIGN.md`](./DESIGN.md)).
-- Um único padrão de frontend: **todas as visões compartilham o mesmo shell** — nenhuma "página" diferente da outra.
-- Acessibilidade **explicitamente fora de escopo** nesta fase (decisão do mantenedor; `prefers-reduced-motion` continua respeitado por custo zero).
-- **Idioma do sistema: 100% inglês** (UI, enunciados, hints, soluções, toasts) — a prova CKA é em inglês; a leitura de tarefas no idioma do exame faz parte do treino. Documentação interna do projeto permanece em PT-BR.
+- **Orbital Control Console** visual identity: a mission console over dark anodized surfaces, hierarchy through luminance steps, with translucent glass reserved for the top layers (full contract in [`DESIGN.md`](./DESIGN.md)).
+- A single frontend standard: **all views share the same shell** — no two "pages" differ from each other.
+- Accessibility **explicitly out of scope** at this stage (maintainer's decision; `prefers-reduced-motion` remains respected at zero cost).
+- **System language: 100% English** (UI, question prompts, hints, solutions, toasts) — the CKA exam is in English; reading tasks in the exam language is part of the training. All project documentation is in English.

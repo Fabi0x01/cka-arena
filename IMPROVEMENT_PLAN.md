@@ -1,427 +1,428 @@
-# Plano de Análise Arquitetural e Melhorias Profundas — CKA Arena
+# Architectural Analysis and Deep Improvements Plan — CKA Arena
 
-> **Registro histórico (auditoria de 21/11/2026) — congelado.** Diagnóstico forense e plano de melhorias, implementados na sequência (§7). Módulos citados como defeituosos (ex.: `app/composer.py`, `app/fault_units.py` e o `app/pipeline.py` monolítico) foram removidos ou reescritos; números de linhas, contagens e medidas refletem aquele momento. Estado atual: `README.md` e `ARCHITECTURE.md`.
+> **Translated from the original pt-BR.**
+>
+> **Historical record (audit of 2026-11-21) — frozen.** Forensic diagnosis and improvement plan, implemented right afterwards (§7). Modules cited as defective (e.g. `app/composer.py`, `app/fault_units.py` and the monolithic `app/pipeline.py`) were removed or rewritten; line numbers, counts and measurements reflect that moment. Current state: `README.md` and `ARCHITECTURE.md`.
 
-> **Data da auditoria:** 2026-11-21 · **Escopo:** Auditoria completa do código (`app/`, `static/`, `scenarios/seed/`, `tests/` — 8.630 linhas de código, 106 testes `pytest` verdes), configuração (`llm_config.json`) e evidências forenses do banco real (`data/cka_arena.db`: 135 questões, 40 jobs de geração, 618 chamadas LLM, 9 sessões, 36 check runs).
-> **Objetivo:** Transformar o **CKA Arena** numa plataforma local de treino CKA rápida, confiável e pedagogicamente fiel ao exame real (CNCF 2025/2026 / Killer.sh), atacando na raiz os 3 sintomas críticos relatados — **lentidão na geração**, **baixa qualidade/construção sem sentido das questões** e **alta taxa de quarentena** — além dos débitos estruturais do restante da arquitetura.
+> **Audit date:** 2026-11-21 · **Scope:** Full audit of the code (`app/`, `static/`, `scenarios/seed/`, `tests/` — 8,630 lines of code, 106 green `pytest` tests), configuration (`llm_config.json`) and forensic evidence from the real question bank (`data/cka_arena.db`: 135 questions, 40 generation jobs, 618 LLM calls, 9 sessions, 36 check runs).
+> **Goal:** Turn **CKA Arena** into a fast, reliable local CKA training platform pedagogically faithful to the real exam (CNCF 2025/2026 / Killer.sh), attacking at the root the 3 critical reported symptoms — **slow generation**, **low quality / nonsensical question construction** and **high quarantine rate** — plus the structural debt in the rest of the architecture.
 
 ---
 
-## Sumário Executivo: Diagnóstico Quantitativo vs. Metas
+## Executive Summary: Quantitative Diagnosis vs. Targets
 
-| Indicador | Real Medido (`data/cka_arena.db` / código) | Causa Raiz Principal | Meta Alvo (Pós-Melhorias) |
+| Indicator | Measured Reality (`data/cka_arena.db` / code) | Main Root Cause | Target (Post-Improvements) |
 | :--- | :--- | :--- | :--- |
-| **Taxa de quarentena (LLM)** | **60,2%** (71 `draft` vs. 47 `published` em 118 registros LLM; `boss_fight` atinge **76,9%**: 40 `draft` vs. 12 `published`) | Retries sem histórico `assistant`, digest pós-cleanup vazio, `len_gte` quebrado, erros de schema classificados como `infra`, LIST-mode sem `.items[*]`, gravação de `draft` em falhas intermediárias | **< 10%** em `exam_standard` e `killer_hardcore`; **< 15%** em `boss_fight` |
-| **Tempo de geração por lote** | **~29 min (1.734,6s)** no último `exam_standard × 5` (`gen-989c40274b`, publicando apenas 3/5); 16–30 min em lotes recentes | **> 95% do tempo gasto no cluster**, não na LLM: `_probe_lock` serializado, `settle()` bloqueando 45s em pods intencionalmente `Pending`, `ephemeral_probe` em pod novo por check/poll + mismatch de timeout 25s × 60s, `_repair(deep=True)` cego | **20–45s por questão** (~2–3 min por lote de 5 questões) |
-| **Distribuição LLM `exam_standard`** | **12** Services & Networking · **1** Troubleshooting · **1** Workloads · **0** Storage · **0** Cluster Architecture | Viés extremo do prompt (`SOLVABLE PATTERN` único em S&N), `setup.commands`/`solution.node_commands` omitidos no contrato JSON e ausência de planejamento curricular | **Cobertura balanceada 5×3** nos 5 domínios CNCF e 35–40 arquétipos do currículo 2025/2026 |
-| **Qualidade narrativa (`killer`/`boss`)** | **6/9 (67%)** das questões do Composer caíram no fallback robótico `"Repair N cluster faults (...)"` + 4 clones de NetworkPolicy no caminho autoral | Bug determinístico em `_narrate()` (exige namespaces de unidades `node_scoped` no texto), Composer colando 3–5 falhas desconexas em namespaces separados e vazando a causa raiz no nome do namespace/sintoma | **100% formato killer.sh/CKA**, 0 spoilers, 0 clones, incidentes com cadeia causal real |
-| **Latência do `Check` do usuário** | Até **60s** de espera quando o cenário possui Pod intencionalmente `Pending` | `SessionService.check()` chama `run_checks(settle=True)` e `settle()` trata qualquer pod `Pending` como "instável" | **< 3s** (detecção imediata de estado terminal `Unschedulable`/`ImagePullBackOff`/`CrashLoopBackOff`) |
-| **Telemetria do banco (`bank_questions`)** | `times_used=0`, `last_used_at=NULL`, `first_try_pass_count=0`, `avg_solve_seconds=NULL`, `sessions.total_weight=0` em **100%** dos registros | `sessions.py` nunca atualiza estatísticas de uso/acerto em `bank_questions` e `bank.draw_exam_sample()` não retorna `weight_pct` | **100% instrumentada** alimentando sorteio anti-repetição e calibração de tempo |
+| **Quarantine rate (LLM)** | **60.2%** (71 `draft` vs. 47 `published` out of 118 LLM records; `boss_fight` reaches **76.9%**: 40 `draft` vs. 12 `published`) | Retries without `assistant` history, empty post-cleanup digest, broken `len_gte`, schema errors classified as `infra`, LIST-mode without `.items[*]`, writing `draft` on intermediate failures | **< 10%** in `exam_standard` and `killer_hardcore`; **< 15%** in `boss_fight` |
+| **Generation time per batch** | **~29 min (1,734.6s)** on the last `exam_standard × 5` (`gen-989c40274b`, publishing only 3/5); 16–30 min on recent batches | **> 95% of the time spent on the cluster**, not the LLM: serialized `_probe_lock`, `settle()` blocking 45s on intentionally `Pending` pods, `ephemeral_probe` in a new pod per check/poll + 25s × 60s timeout mismatch, blind `_repair(deep=True)` | **20–45s per question** (~2–3 min per batch of 5 questions) |
+| **LLM `exam_standard` distribution** | **12** Services & Networking · **1** Troubleshooting · **1** Workloads · **0** Storage · **0** Cluster Architecture | Extreme prompt bias (single `SOLVABLE PATTERN` in S&N), `setup.commands`/`solution.node_commands` omitted from the JSON contract, and no curriculum planning | **Balanced 5×3 coverage** across the 5 CNCF domains and 35–40 archetypes of the 2025/2026 curriculum |
+| **Narrative quality (`killer`/`boss`)** | **6/9 (67%)** of Composer questions fell into the robotic fallback `"Repair N cluster faults (...)"` + 4 NetworkPolicy clones on the authoring path | Deterministic bug in `_narrate()` (requires `node_scoped` unit namespaces in the text), Composer gluing 3–5 disconnected faults in separate namespaces and leaking the root cause in the namespace name/symptom | **100% killer.sh/CKA format**, 0 spoilers, 0 clones, incidents with a real causal chain |
+| **User `Check` latency** | Up to **60s** of waiting when the scenario has an intentionally `Pending` Pod | `SessionService.check()` calls `run_checks(settle=True)` and `settle()` treats any `Pending` pod as "unstable" | **< 3s** (immediate detection of terminal states `Unschedulable`/`ImagePullBackOff`/`CrashLoopBackOff`) |
+| **Bank telemetry (`bank_questions`)** | `times_used=0`, `last_used_at=NULL`, `first_try_pass_count=0`, `avg_solve_seconds=NULL`, `sessions.total_weight=0` in **100%** of records | `sessions.py` never updates usage/pass statistics in `bank_questions` and `bank.draw_exam_sample()` does not return `weight_pct` | **100% instrumented**, feeding the anti-repetition exam-weight draw and time calibration |
 
 ---
 
-## 1. Diagnóstico Forense: Raiz dos 3 Sintomas Reportados
+## 1. Forensic Diagnosis: Root of the 3 Reported Symptoms
 
-### 1.1 Por que a geração demora 15–30 minutos (o gargalo não está onde parece)
+### 1.1 Why generation takes 15–30 minutes (the bottleneck is not where it seems)
 
-A análise temporal linha a linha de `llm_generations` e `bank_questions` no último job `exam_standard × 5` (`gen-989c40274b`, usando `deepseek-flash` com `thinking` desligado no fast path) prova onde o tempo é gasto:
+The line-by-line temporal analysis of `llm_generations` and `bank_questions` in the last `exam_standard × 5` job (`gen-989c40274b`, using `deepseek-flash` with `thinking` off in the fast path) proves where the time goes:
 
-- As **3 chamadas iniciais paralelas de LLM-B** terminaram em **+5.7s, +6.0s e +6.1s**.
-- As **3 chamadas do Revisor (LLM-C)** terminaram em **+0.8s** (`+6.5s`, `+6.7s`, `+7.0s`).
-- Entretanto, os 3 primeiros slots só terminaram o Solvability Probe em **+221.9s**, **+331.8s** e **+437.0s** — e o job completo levou **1.734,6s (~28,9 minutos)** para publicar 3 de 5 questões.
+- The **3 initial parallel LLM-B calls** finished at **+5.7s, +6.0s and +6.1s**.
+- The **3 Reviewer (LLM-C) calls** finished at **+0.8s** (`+6.5s`, `+6.7s`, `+7.0s`).
+- However, the first 3 slots only finished the Solvability Probe at **+221.9s**, **+331.8s** and **+437.0s** — and the whole job took **1,734.6s (~28.9 minutes)** to publish 3 of 5 questions.
 
-Os **6 multiplicadores reais de latência** no código atual são:
+The **6 real latency multipliers** in the current code are:
 
-1. **`ScenarioEngine.settle()` cego para falhas intencionais (`app/scenario_engine.py:122-139`):**
-   `settle()` considera instável qualquer pod com `phase in ("Pending", "Unknown")`. Em qualquer cenário de Scheduling, `nodeSelector`, `Taints/Tolerations`, `ResourceQuota`/`cpu` ou `PVC` pendente, o pod fica `Pending` **por design**. O `_probe_locked` (`app/pipeline.py:1225`) paga **45s inteiros** travado no `settle()` antes mesmo de rodar o sanity check (e na prática do usuário, `SessionService.check()` usa `settle=True` com teto de **60s**).
-2. **`self._probe_lock` serializa 100% dos probes (`app/pipeline.py:306,1197`):**
-   Embora até 3 Construtores rodem em paralelo (`asyncio.Semaphore(3)` na linha 414), todos ficam enfileirados em um único lock global de probe — mesmo quando criam recursos isolados em namespaces distintos.
-3. **Efeito cascata no `ephemeral_probe` (`app/validator.py:33-38,149-180` × `app/pipeline.py:882`):**
-   - Cada check HTTP com `ephemeral_probe: true` cria um Pod `curlimages/curl:8.10.1` (`kubectl run`), faz polling de 1.5s até `Succeeded`/`Failed`, busca logs e deleta o pod — repetido em cada rodada de poll do sanity e da verificação da solução.
-   - Além disso, há uma **inversão de timeouts**: `_probe_run(..., timeout=60)` (`validator.py:149`) roda dentro de `run_check()`, cujo `TIMEOUTS["pod_exec_exit_zero"]` é **25s** (`validator.py:34`). Se o pull/start/exec do pod efêmero passar de 25s, `asyncio.wait_for` dispara `TimeoutError`, que vira `status="ERROR"`, força **3 tentativas do check (até 75s)**, marca a rodada como `infra_error=True`, e aciona `_probe_retry` (`pipeline.py:882`), que re-executa o probe completo até **3 vezes adicionais** (backoff `3s + 6s + 9s`).
-4. **Dupla confirmação integral no probe (`app/pipeline.py:1285`):**
-   Após aplicar a solução, `_probe_locked` exige `consecutive_full >= 2` rodadas completas `all_passed`, re-executando todos os checks (inclusive subindo novos pods efêmeros `curl`) mesmo para verificações puramente declarativas da API.
-5. **`_repair()` trava em `deep=True` sem diagnóstico vivo (`app/pipeline.py:1396`):**
-   Todo reparo força `deep=True` (modo reasoning do modelo, 10× mais lento), não grava registro em `llm_generations` (ponto cego total de latência/custo) e, como veremos na seção 1.3, recebe `live_namespace_state` vazio.
-6. **Colisão de namespaces genéricos e `Terminating` (`app/scenario_engine.py:60-89,203` × `app/pipeline.py:1023-1028`):**
-   A LLM frequentemente reutiliza nomes fixos (`web`, `shop`, `sched-fix`, `cka-netpol`). Como `cleanup()` usa `kubectl delete namespace ... --wait=false`, a tentativa seguinte (ou dry-run no mesmo namespace) cai em `Terminating` e paga loops de espera de 24–40s até forçar a finalização.
+1. **`ScenarioEngine.settle()` blind to intentional faults (`app/scenario_engine.py:122-139`):**
+   `settle()` considers any pod with `phase in ("Pending", "Unknown")` unstable. In any Scheduling, `nodeSelector`, `Taints/Tolerations`, `ResourceQuota`/`cpu` or pending `PVC` scenario, the pod is `Pending` **by design**. The `_probe_locked` (`app/pipeline.py:1225`) pays a **full 45s** stuck in `settle()` before even running the sanity check (and in user practice, `SessionService.check()` uses `settle=True` with a ceiling of **60s**).
+2. **`self._probe_lock` serializes 100% of probes (`app/pipeline.py:306,1197`):**
+   Although up to 3 Builders run in parallel (`asyncio.Semaphore(3)` on line 414), all of them queue behind a single global probe lock — even when creating isolated resources in distinct namespaces.
+3. **Cascading effect on `ephemeral_probe` (`app/validator.py:33-38,149-180` × `app/pipeline.py:882`):**
+   - Each HTTP check with `ephemeral_probe: true` creates a Pod `curlimages/curl:8.10.1` (`kubectl run`), polls at 1.5s intervals until `Succeeded`/`Failed`, fetches logs and deletes the pod — repeated on every poll round of both the sanity and the solution verification.
+   - Additionally, there is a **timeout inversion**: `_probe_run(..., timeout=60)` (`validator.py:149`) runs inside `run_check()`, whose `TIMEOUTS["pod_exec_exit_zero"]` is **25s** (`validator.py:34`). If the ephemeral pod pull/start/exec exceeds 25s, `asyncio.wait_for` raises `TimeoutError`, which becomes `status="ERROR"`, forces **3 check retries (up to 75s)**, marks the round as `infra_error=True`, and triggers `_probe_retry` (`pipeline.py:882`), which re-runs the full probe up to **3 additional times** (backoff `3s + 6s + 9s`).
+4. **Full double confirmation in the probe (`app/pipeline.py:1285`):**
+   After applying the solution, `_probe_locked` requires `consecutive_full >= 2` complete `all_passed` rounds, re-running all checks (including spinning up new ephemeral `curl` pods) even for purely declarative API verifications.
+5. **`_repair()` stuck on `deep=True` without live diagnostics (`app/pipeline.py:1396`):**
+   Every repair forces `deep=True` (model reasoning mode, 10× slower), does not write a record to `llm_generations` (a total blind spot for latency/cost) and, as we will see in section 1.3, receives an empty `live_namespace_state`.
+6. **Generic namespace collisions and `Terminating` (`app/scenario_engine.py:60-89,203` × `app/pipeline.py:1023-1028`):**
+   The LLM frequently reuses fixed names (`web`, `shop`, `sched-fix`, `cka-netpol`). Since `cleanup()` uses `kubectl delete namespace ... --wait=false`, the next attempt (or a dry-run in the same namespace) falls into `Terminating` and pays 24–40s wait loops until forced finalization.
 
 ---
 
-### 1.2 Por que as questões vêm com construção pífia e sem sentido
+### 1.2 Why questions come with flimsy, nonsensical construction
 
-O problema de qualidade decorre de **duas arquiteturas com defeitos distintos**: o **Composer v5** (usado para `killer_hardcore` e `boss_fight`) e o **Construtor LLM autoral** (usado para `exam_standard` e como fallback das tiers duras).
+The quality problem stems from **two architectures with distinct defects**: the **Composer v5** (used for `killer_hardcore` and `boss_fight`) and the **authoring LLM Builder** (used for `exam_standard` and as the fallback of the hard tiers).
 
-#### A. O fracasso pedagógico do Composer v5 (`app/composer.py` + `app/fault_units.py`)
+#### A. The pedagogical failure of Composer v5 (`app/composer.py` + `app/fault_units.py`)
 
-O Composer foi introduzido para reduzir a quarentena das tiers difíceis, mas sacrificou a coerência técnica e didática das questões:
+The Composer was introduced to reduce quarantine on the hard tiers, but sacrificed the technical and didactic coherence of the questions:
 
-1. **Questões "Frankenstein" sem nexo causal:**
-   `composer.compose()` sorteia 3 (`killer_hardcore`) ou 5 (`boss_fight`) unidades independentes de `fault_units.py` e as concatena no mesmo enunciado, cada uma em seu próprio namespace (`cka-b-*`), quase todas usando um Deployment chamado `web` e um Service chamado `web-svc`.
-   - *Exemplo real publicado no banco (`q-60f4e53465ec`, `boss_fight`):* coloca na mesma questão (1) criar uma `HTTPRoute` em `cka-b-gateway-route-sr77`, (2) corrigir `CrashLoopBackOff` de `web` em `cka-b-crashloop-cmd-vv7w`, (3) corrigir `ImagePullBackOff` de `web` em `cka-b-image-pull-osup`, (4) fazer upgrade de um chart Helm em `cka-b-helm-upgrade-24hv` e (5) iniciar o `kubelet` em `node01`. Não há nenhuma arquitetura de aplicação ou relação de causa e efeito — são 5 mini-exercícios desconexos colados juntos.
-2. **Vazamento explícito de causa raiz (Spoilers) violando o formato CKA:**
-   - Os namespaces gerados contêm o nome da falha no próprio identificador: `cka-b-crashloop-cmd-vv7w`, `cka-k-pod-wrong-clai-6u87`, `cka-b-svc-selector-iisj`, `cka-b-cpu-request-v0a0`.
-   - Os textos de `symptom` em `fault_units.py` entregam o diagnóstico pronto ao candidato (ex.: *"because its container command exits immediately"*, *"because its image tag does not exist"*, *"its selector does not match the Pods"*, *"its kubelet service is not running"*), violando diretamente a regra do `LLM_SCENARIO_SPEC.md` §1.2 (*"sintomas observáveis — NUNCA a causa nem a solução"*).
-   - Tarefas genéricas (*"Fix the workload..."*, *"Repair the Deployment..."*) sem referenciar o namespace quando múltiplos `web` existem no mesmo enunciado.
-3. **Bug determinístico de `_narrate()` (`app/pipeline.py:796-797` × `app/composer.py:100-103`):**
-   - `composer.py:101-103` cria uma entrada em `ns_map` para **toda** unidade sorteada — inclusive unidades `node_scoped` sem namespace (`kubelet-down` e `etcd-snapshot`).
-   - Em `pipeline.py:796-797`, `_narrate()` valida a resposta do LLM Narrator exigindo:
+1. **"Frankenstein" questions with no causal nexus:**
+   `composer.compose()` draws 3 (`killer_hardcore`) or 5 (`boss_fight`) independent units from `fault_units.py` and concatenates them into the same question prompt, each in its own namespace (`cka-b-*`), almost all of them using a Deployment called `web` and a Service called `web-svc`.
+   - *Real example published in the bank (`q-60f4e53465ec`, `boss_fight`):* places in the same question (1) creating an `HTTPRoute` in `cka-b-gateway-route-sr77`, (2) fixing `CrashLoopBackOff` of `web` in `cka-b-crashloop-cmd-vv7w`, (3) fixing `ImagePullBackOff` of `web` in `cka-b-image-pull-osup`, (4) upgrading a Helm chart in `cka-b-helm-upgrade-24hv` and (5) starting `kubelet` on `node01`. There is no application architecture or cause-and-effect relationship whatsoever — 5 disconnected mini-exercises glued together.
+2. **Explicit root-cause leakage (Spoilers) violating the CKA format:**
+   - The generated namespaces carry the fault name in the identifier itself: `cka-b-crashloop-cmd-vv7w`, `cka-k-pod-wrong-clai-6u87`, `cka-b-svc-selector-iisj`, `cka-b-cpu-request-v0a0`.
+   - The `symptom` texts in `fault_units.py` hand the diagnosis to the candidate on a plate (e.g. *"because its container command exits immediately"*, *"because its image tag does not exist"*, *"its selector does not match the Pods"*, *"its kubelet service is not running"*), directly violating the `LLM_SCENARIO_SPEC.md` §1.2 rule (*"sintomas observáveis — NUNCA a causa nem a solução"* [observable symptoms — NEVER the cause nor the solution]).
+   - Generic tasks (*"Fix the workload..."*, *"Repair the Deployment..."*) without referencing the namespace when multiple `web`s exist in the same question prompt.
+3. **Deterministic `_narrate()` bug (`app/pipeline.py:796-797` × `app/composer.py:100-103`):**
+   - `composer.py:101-103` creates an entry in `ns_map` for **every** drawn unit — including `node_scoped` units without a namespace (`kubelet-down` and `etcd-snapshot`).
+   - In `pipeline.py:796-797`, `_narrate()` validates the LLM Narrator response requiring:
      ```python
      for ns in meta["namespaces"].values():
          valid = valid and ns in prompt
      ```
-   - Como um namespace inventado tipo `cka-b-kubelet-down-xxxx` nunca é citado no enunciado nem existe no setup, **essa validação retorna `False` em 100% das questões `boss_fight` com nó e em ~50% das `killer_hardcore`**. Resultado: a chamada ao LLM Narrator é descartada (e nem logada em `llm_generations`), caindo no fallback mecânico `"Repair 5 cluster faults (Troubleshooting)"` — verificado em **6 de 9 (67%)** questões publicadas pelo Composer.
-4. **Bugs estruturais internos em `composer.py` e `fault_units.py`:**
-   - `CHECK_LIMIT = {"boss_fight": 11, "killer_hardcore": 6}` (`composer.py:21,51`) é declarado e lido em `select_units()`, mas **nunca aplicado** (o banco possui questões `boss_fight` do Composer com 12 checks e `killer_hardcore` com 7 checks).
-   - **Ignora filtros do usuário:** `composer.compose()` e `select_units()` não recebem `domains`, `subtopics` nem `constraints` (`focus_hint`) do pedido — se o usuário pedir apenas `Storage`, o Composer sorteia `Gateway`, `Helm` e `kubelet`.
-   - **Colisão de recurso cluster-scoped:** tanto `pv-claimref` (`fault_units.py:287`) quanto `pod-wrong-claim` (`fault_units.py:324`) criam um `PersistentVolume` cluster-scoped com exatamente o mesmo nome `pv-data`! Se sorteados juntos, o segundo sobrescreve o primeiro e o cleanup de um deleta o PV do outro.
-   - **Interferência cruzada com `kubelet-down`:** parar `kubelet` em `node01` afeta pods de outras unidades workload do mesmo cenário que o scheduler tenha colocado em `node01`; `_merge_solution` roda `node_commands` por último, mas se o pod não estiver pronto ou o check rodar antes da recuperação do nó, a composição falha.
-   - **`etcd-snapshot` inválido para `boss_fight`:** `setup.node_commands` é vazio (`[]`), de modo que o gate `_tier_band_errors` rejeita se cair sem outra unidade com `node_commands` de setup.
-   - **`docs_links` sempre `[]`:** `composer.py:175` não preenche links para a documentação oficial permitida na prova.
+   - Since an invented namespace like `cka-b-kubelet-down-xxxx` is never cited in the question prompt nor exists in the setup, **this validation returns `False` in 100% of `boss_fight` questions with a node and in ~50% of `killer_hardcore`**. Result: the LLM Narrator call is discarded (and not even logged in `llm_generations`), falling into the mechanical fallback `"Repair 5 cluster faults (Troubleshooting)"` — verified in **6 of 9 (67%)** questions published by the Composer.
+4. **Internal structural bugs in `composer.py` and `fault_units.py`:**
+   - `CHECK_LIMIT = {"boss_fight": 11, "killer_hardcore": 6}` (`composer.py:21,51`) is declared and read in `select_units()`, but **never enforced** (the bank contains Composer `boss_fight` questions with 12 checks and `killer_hardcore` with 7 checks).
+   - **Ignores user filters:** `composer.compose()` and `select_units()` receive no `domains`, `subtopics` or `constraints` (`focus_hint`) from the request — if the user asks for `Storage` only, the Composer draws `Gateway`, `Helm` and `kubelet`.
+   - **Cluster-scoped resource collision:** both `pv-claimref` (`fault_units.py:287`) and `pod-wrong-claim` (`fault_units.py:324`) create a cluster-scoped `PersistentVolume` with exactly the same name `pv-data`! If drawn together, the second overwrites the first and the cleanup of one deletes the other's PV.
+   - **Cross-interference with `kubelet-down`:** stopping `kubelet` on `node01` affects pods of other workload units in the same scenario that the scheduler placed on `node01`; `_merge_solution` runs `node_commands` last, but if the pod is not ready or the check runs before node recovery, the composition fails.
+   - **`etcd-snapshot` invalid for `boss_fight`:** `setup.node_commands` is empty (`[]`), so the `_tier_band_errors` gate rejects if it falls without another unit having `node_commands` in setup.
+   - **`docs_links` always `[]`:** `composer.py:175` does not fill links to the official documentation allowed in the exam.
 
-#### B. Defeitos de qualidade no caminho autoral LLM (`app/pipeline.py:_build_one`)
+#### B. Quality defects on the LLM authoring path (`app/pipeline.py:_build_one`)
 
-Quando a geração vai pelo caminho autoral LLM (`exam_standard` e fallback de `killer`/`boss`), surgem 4 problemas estruturais:
+When generation goes through the LLM authoring path (`exam_standard` and fallback of `killer`/`boss`), 4 structural problems arise:
 
-1. **Viés extremo por few-shot único (colapso de diversidade):**
-   - `BUILDER_SYSTEM` (`pipeline.py:179-186`) tem apenas um `SOLVABLE PATTERN` explícito: Deployment `web` + Service `web-svc` em `Services & Networking`. Resultado observado no banco: das 14 questões `exam_standard` publicadas por LLM, **12 são de `Services & Networking`**, 1 de Troubleshooting, 1 de Workloads, **0 de Storage** e **0 de Cluster Architecture**.
-   - `HARD_TIER_ADDENDUM` (`pipeline.py:242-244`) injeta um único exemplar fixo (`sn-networkpolicy-dns.json`). Resultado observado no banco: **4 clones publicados** com o título exato `"Allow Selected Traffic Through Default Deny"` em `killer_hardcore` de `Services & Networking` (além de dezenas de variações de `web` + `web-svc`).
-2. **Contrato de schema incompleto no `BUILDER_SYSTEM` (`pipeline.py:126-129`):**
-   - O `OUTPUT CONTRACT` mostrado à LLM define `setup` apenas com `namespaces`, `manifests`, `node_commands` — **omitindo `setup.commands`** (necessário para `helm install` ou `kubectl taint`).
-   - Define `solution` apenas com `manifests`, `commands` — **omitindo `solution.node_commands`** (impossibilitando que a LLM gere cenários onde a solução roda no nó, como `systemctl start kubelet` ou `etcdctl snapshot save`).
-   - Define `cleanup` com o campo legado `kubectl_commands` em vez de `commands`.
-3. **Ausência de coordenação entre slots paralelos e histórico do banco:**
-   - `"avoid": "duplicate titles or topics from previous slots"` (`pipeline.py:558`) é apenas texto estático — os 3 slots paralelos não recebem os títulos já existentes no banco nem um arquétipo/domínio atribuído para cada slot. Todos os slots convergem para o tema mais fácil (Service selector / CrashLoop `web`).
-4. **Validações de qualidade ausentes no Gate D / Revisor C:**
-   - Não há verificação anti-spoiler determinística (vários prompts LLM vazam a solução ou termos de causa raiz antes de `Perform the following tasks:`).
-   - Não há validação de `docs_links` (o prompt pede URLs de `kubernetes.io/...`, mas nenhuma verificação checa se existem ou têm domínio válido).
+1. **Extreme bias from a single few-shot (diversity collapse):**
+   - `BUILDER_SYSTEM` (`pipeline.py:179-186`) has only one explicit `SOLVABLE PATTERN`: Deployment `web` + Service `web-svc` in Services & Networking. Observed result in the bank: of the 14 `exam_standard` questions published by LLM, **12 are `Services & Networking`**, 1 Troubleshooting, 1 Workloads, **0 Storage** and **0 Cluster Architecture**.
+   - `HARD_TIER_ADDENDUM` (`pipeline.py:242-244`) injects a single fixed exemplar (`sn-networkpolicy-dns.json`). Observed result in the bank: **4 clones published** with the exact title `"Allow Selected Traffic Through Default Deny"` in `killer_hardcore` of `Services & Networking` (plus dozens of `web` + `web-svc` variations).
+2. **Incomplete schema contract in `BUILDER_SYSTEM` (`pipeline.py:126-129`):**
+   - The `OUTPUT CONTRACT` shown to the LLM defines `setup` with only `namespaces`, `manifests`, `node_commands` — **omitting `setup.commands`** (needed for `helm install` or `kubectl taint`).
+   - It defines `solution` with only `manifests`, `commands` — **omitting `solution.node_commands`** (making it impossible for the LLM to generate scenarios where the solution runs on the node, such as `systemctl start kubelet` or `etcdctl snapshot save`).
+   - It defines `cleanup` with the legacy field `kubectl_commands` instead of `commands`.
+3. **No coordination between parallel slots and bank history:**
+   - `"avoid": "duplicate titles or topics from previous slots"` (`pipeline.py:558`) is just static text — the 3 parallel slots receive neither the titles already existing in the bank nor an archetype/domain assigned per slot. All slots converge on the easiest theme (Service selector / CrashLoop `web`).
+4. **Missing quality validations in Gate D / Reviewer C:**
+   - No deterministic anti-spoiler verification (several LLM prompts leak the solution or root-cause terms before `Perform the following tasks:`).
+   - No validation of `docs_links` (the prompt asks for URLs of `kubernetes.io/...`, but no check verifies they exist or have a valid domain).
 
 ---
 
-### 1.3 Por que questões vão para quarentena com tanta frequência (Taxonomia das 71 Drafts)
+### 1.3 Why questions go to quarantine so often (Taxonomy of the 71 Drafts)
 
-A inspeção de todas as **71 questões em estado `draft`** no `data/cka_arena.db` revela exatamente onde o pipeline falha:
+Inspecting all **71 questions in `draft` state** in `data/cka_arena.db` reveals exactly where the pipeline fails:
 
-| Categoria da Falha (evidência em `probe_result_json`) | Composer | LLM Autoral | Total | Causa Raiz Técnica |
+| Failure Category (evidence in `probe_result_json`) | Composer | Authoring LLM | Total | Technical Root Cause |
 | :--- | :---: | :---: | :---: | :--- |
-| **`infra_error` no sanity/final check** | 0 | 17 | **17** | `validator.py` classifica bugs Python de params da LLM (`TypeError`, `KeyError`) como `ERROR`; `settle` curto/timeout de 25s em `ephemeral_probe` |
-| **Solução rejeitada no apply (`other` / `BadRequest` / `immutable` / `AlreadyExists` / `taint`)** | 2 | 15 | **17** | `solution.manifests` não passa por `--dry-run=server` no Gate D; LLM tenta `kubectl patch` em campos imutáveis de `PVC`/`Pod`; 2 drafts do Composer falharam por JSON patch inválido em `svc-targetport` (corrigido depois, mas sem gate de JSON `-p`) |
-| **`kubectl_jsonpath` retorna vazio (`''`/`None`) ou string errada** | 0 | 11 | **11** | LIST mode com `label_selector` sem `.items[*]` no jsonpath; regex rígido em multi-linhas |
-| **Lógica inconsistente entre `setup`/`solution`/`checks`** | 1 | 7 | **8** | **Amnésia de retry** (sem mensagem `assistant` nas iterações) + **digest morto no `_repair()`** + erro de lógica não detectado em gate pré-probe |
-| **Exceção no probe (setup/SSH/timeout)** | 0 | 7 | **7** | `setup.commands` falhando (ex.: `helm repo add` de repo inexistente, taint ausente, SSH/comando inválido) |
-| **Outros checks falham (`no pods match`, `Pending`, `HTTP stdout=''`, `len_gte`, `Helm missing`)** | 0 | 10 | **10** | Bug real em `len_gte` (`split(",")` sobre saída separada por espaço/newline), `setup` sem `helm install`, Service sem ready endpoints |
-| **Total** | **3** | **68** | **71** | **60,2% de todas as questões geradas por LLM no histórico** |
+| **`infra_error` on sanity/final check** | 0 | 17 | **17** | `validator.py` classifies Python bugs in LLM params (`TypeError`, `KeyError`) as `ERROR`; short `settle`/25s timeout in `ephemeral_probe` |
+| **Solution rejected on apply (`other` / `BadRequest` / `immutable` / `AlreadyExists` / `taint`)** | 2 | 15 | **17** | `solution.manifests` not run through `--dry-run=server` in Gate D; LLM attempts `kubectl patch` on immutable `PVC`/`Pod` fields; 2 Composer drafts failed due to invalid JSON patch in `svc-targetport` (fixed later, but no JSON `-p` gate) |
+| **`kubectl_jsonpath` returns empty (`''`/`None`) or wrong string** | 0 | 11 | **11** | LIST mode with `label_selector` without `.items[*]` in the jsonpath; rigid regex on multi-lines |
+| **Inconsistent logic between `setup`/`solution`/`checks`** | 1 | 7 | **8** | **Retry amnesia** (no `assistant` message across iterations) + **dead digest in `_repair()`** + logic error not detected in a pre-probe gate |
+| **Exception in the probe (setup/SSH/timeout)** | 0 | 7 | **7** | `setup.commands` failing (e.g. `helm repo add` of a nonexistent repo, missing taint, invalid SSH/command) |
+| **Other checks fail (`no pods match`, `Pending`, `HTTP stdout=''`, `len_gte`, `Helm missing`)** | 0 | 10 | **10** | Real bug in `len_gte` (`split(",")` over space/newline-separated output), `setup` without `helm install`, Service without ready endpoints |
+| **Total** | **3** | **68** | **71** | **60.2% of all questions generated by LLM historically** |
 
-Os **7 bugs concretos de código** que explicam essa taxa de rejeição são:
+The **7 concrete code bugs** explaining this rejection rate are:
 
-1. **Bug crítico — Amnésia nos retries de `_build_one` (`app/pipeline.py:612-614, 641-643, 655-657, 697-701`):**
-   Quando uma tentativa falha em schema, gates, reviewer ou probe, o loop adiciona `{"role": "user", "content": "Your previous output was invalid: ..."}` à lista `messages`, **mas NUNCA adiciona `{"role": "assistant", "content": text}` antes!** O modelo recebe uma reclamação sobre um JSON que não está no histórico da conversa e precisa gerar tudo às cegas do zero.
-2. **Bug crítico — `live_namespace_state` sempre vazio no `_repair()` (`app/pipeline.py:660, 679, 1324-1328, 1380`):**
-   O comentário em `pipeline.py:1363` e `LLM_PIPELINE_SPEC.md` promete que `_repair()` recebe o estado vivo dos namespaces (`pods`, `readiness`, `services`, `endpoints`). Porém, `_probe_locked()` executa `await self.engine.cleanup(env)` no bloco `finally` (`linha 1326`) **antes de retornar**. Quando `_build_one()` chama `_repair()` na linha 679 e executa `self.engine.namespace_digest(env.setup.namespaces)` (`linha 1380`), todos os namespaces já foram deletados (`Terminating` ou `NotFound`)! O repair opera cego.
-3. **Bug crítico — Erros determinísticos de definição de check viram `infra_error` (`app/validator.py:438-439`):**
-   Em `run_check()`, qualquer exceção levantada por `fn(params)` — como `KeyError` (param faltando), `TypeError` (ex.: `expected` incompatível como `chk-iptables-removed` na linha 73 do log de drafts), `ValueError` em `compare()` ou `re.error` em regex malformado — é capturada e transformada em `status = ERROR`. Isso marca `infra_error = True`, queima 3 retries de check + 3 retries de `_probe_retry` (desperdiçando ~2 min) e devolve `"infra"` sem dar chance de reparo ao modelo!
-4. **Bug real — `compare(..., "len_gte", ...)` só aceita vírgula (`app/validator.py:66-68`):**
-   `kubectl -o jsonpath="{.subsets[*].addresses[*].ip}"` separa múltiplos valores por **espaço** (e `range ... "\n"` por **quebra de linha**), nunca por vírgula. Como `validator.py:67` faz `actual.split(",")`, `"10.40.0.2 10.40.0.3"` vira lista de tamanho `1`, falhando qualquer check com `min >= 2` (evidência real em `q-81441be4fcb1`).
-5. **Bug de contrato — `kubectl_jsonpath` em LIST mode (`app/pipeline.py:166-169, 1136-1146`):**
-   Ao usar `kind="Pod"` + `label_selector="app=web"` sem `name`, o `kubectl` retorna um `List` com raiz `.items[]`. O prompt não explica que em LIST mode o jsonpath precisa começar em `{.items[*].` ou `{range .items[*]}`; a LLM escreve `{.status.phase}` (que funciona só em objeto único) e recebe string vazia `""` (evidência em `q-f50b83a3fcfc`).
-6. **Poluição do banco com drafts intermediários (`app/pipeline.py:663, 670, 856, 867`):**
-   O pipeline insere um novo registro `state="draft"` no SQLite **em cada falha intermediária** antes mesmo do loop de repairs/retries terminar. Se uma questão falhar 2 vezes e passar na 3ª, gera 2 drafts mortos + 1 publicada (inflando a tabela para 71 drafts de apenas 40 requests).
-7. **Gaps de validação no Gate D (`app/pipeline.py:916-1038`):**
-   - `kubectl apply --dry-run=server` roda apenas em `env.setup.manifests` (`linha 1017`), nunca em `env.solution.manifests`.
-   - Não valida sintaxe JSON de flags `-p`/`--patch` em `commands` (nem bloqueia patches em campos imutáveis como `PVC.spec.storageClassName`, `PVC.spec.accessModes`, `Pod.spec.volumes`).
-   - Não valida a regra documentada em `LLM_PIPELINE_SPEC.md` §5.1 de que `pod_exec_must_fail` precisa de timeout embutido no comando.
-   - `_tier_band_errors` (`linha 1187`) só falha se `len(fails) >= 2` e ignora quando `setup.node_commands` está ausente se não cair na condição exata.
+1. **Critical bug — Amnesia across `_build_one` retries (`app/pipeline.py:612-614, 641-643, 655-657, 697-701`):**
+   When an attempt fails on schema, gates, reviewer or probe, the loop appends `{"role": "user", "content": "Your previous output was invalid: ..."}` to the `messages` list, **but NEVER appends `{"role": "assistant", "content": text}` before it!** The model receives a complaint about a JSON that is not in the conversation history and must regenerate everything blindly from scratch.
+2. **Critical bug — `live_namespace_state` always empty in `_repair()` (`app/pipeline.py:660, 679, 1324-1328, 1380`):**
+   The comment in `pipeline.py:1363` and `LLM_PIPELINE_SPEC.md` promise that `_repair()` receives the live state of the namespaces (`pods`, `readiness`, `services`, `endpoints`). However, `_probe_locked()` executes `await self.engine.cleanup(env)` in the `finally` block (line 1326) **before returning**. When `_build_one()` calls `_repair()` on line 679 and runs `self.engine.namespace_digest(env.setup.namespaces)` (line 1380), all namespaces have already been deleted (`Terminating` or `NotFound`)! The repair operates blind.
+3. **Critical bug — Deterministic check-definition errors become `infra_error` (`app/validator.py:438-439`):**
+   In `run_check()`, any exception raised by `fn(params)` — such as `KeyError` (missing param), `TypeError` (e.g. incompatible `expected` as in `chk-iptables-removed` on line 73 of the drafts log), `ValueError` in `compare()` or `re.error` in a malformed regex — is caught and turned into `status = ERROR`. That marks `infra_error = True`, burns 3 check retries + 3 `_probe_retry` retries (wasting ~2 min) and returns `"infra"` without giving the model a chance to repair!
+4. **Real bug — `compare(..., "len_gte", ...)` only accepts comma (`app/validator.py:66-68`):**
+   `kubectl -o jsonpath="{.subsets[*].addresses[*].ip}"` separates multiple values with a **space** (and `range ... "\n"` with a **newline**), never with a comma. Since `validator.py:67` does `actual.split(",")`, `"10.40.0.2 10.40.0.3"` becomes a list of size `1`, failing any check with `min >= 2` (real evidence in `q-81441be4fcb1`).
+5. **Contract bug — `kubectl_jsonpath` in LIST mode (`app/pipeline.py:166-169, 1136-1146`):**
+   When using `kind="Pod"` + `label_selector="app=web"` without `name`, `kubectl` returns a `List` rooted at `.items[]`. The prompt does not explain that in LIST mode the jsonpath must start at `{.items[*].` or `{range .items[*]}`; the LLM writes `{.status.phase}` (which only works on a single object) and gets an empty string `""` (evidence in `q-f50b83a3fcfc`).
+6. **Bank pollution with intermediate drafts (`app/pipeline.py:663, 670, 856, 867`):**
+   The pipeline inserts a new `state="draft"` record in SQLite **on every intermediate failure** before the repair/retry loop even finishes. If a question fails twice and passes on the 3rd try, it generates 2 dead drafts + 1 published (inflating the table to 71 drafts from only 40 requests).
+7. **Validation gaps in Gate D (`app/pipeline.py:916-1038`):**
+   - `kubectl apply --dry-run=server` runs only on `env.setup.manifests` (line 1017), never on `env.solution.manifests`.
+   - No validation of JSON syntax of `-p`/`--patch` flags in `commands` (nor blocking patches to immutable fields like `PVC.spec.storageClassName`, `PVC.spec.accessModes`, `Pod.spec.volumes`).
+   - No validation of the rule documented in `LLM_PIPELINE_SPEC.md` §5.1 that `pod_exec_must_fail` needs an embedded timeout in the command.
+   - `_tier_band_errors` (line 1187) only fails if `len(fails) >= 2` and ignores missing `setup.node_commands` unless the exact condition is hit.
 
 ---
 
-## 2. Problemas Sistêmicos Além da IA (Auditoria Arquitetural Completa)
+## 2. Systemic Problems Beyond the AI (Full Architectural Audit)
 
-A análise de todo o projeto fora do pipeline LLM encontrou **8 débitos arquiteturais críticos/médios** que comprometem o objetivo de ter uma plataforma sólida localmente:
+The analysis of the entire project outside the LLM pipeline found **8 critical/medium architectural debts** that compromise the goal of having a solid local platform:
 
-| Área | Evidência no Código / Banco | Impacto Real |
+| Area | Evidence in Code / Bank | Real Impact |
 | :--- | :--- | :--- |
-| **1. Telemetria de questões completamente desconectada** | `app/sessions.py` nunca atualiza `bank_questions.times_used`, `last_used_at`, `first_try_pass_count` nem `avg_solve_seconds` (todos `0`/`NULL` nas 135 linhas do DB). `bank.draw_exam_sample()` (`app/bank.py:137-139`) não retorna `weight_pct`, fazendo `sessions.total_weight` ser gravado como `0` em todas as 9 sessões. | O sorteio anti-repetição (`ORDER BY times_used`) é nulo; o percentual do simulado (`earned_weight / total_weight`) não funciona; não há detecção de questões quebradas ou mal calibradas em tempo. |
-| **2. Zero curadoria / gestão de banco e quarentena** | `app/main.py` expõe apenas `/api/bank/coverage` e `/api/bank/preview`. Não existem endpoints nem UI para listar, filtrar, inspecionar `drafts`, ver `probe_result_json`, re-probar, reparar, aposentar (`retired`) ou excluir questões. | Os 71 `drafts` e os clones duplicados ficam presos no SQLite como "buraco negro"; se uma questão publicada tiver bug no enunciado/check durante a prática, o usuário não tem botão de "Report / Retire". |
-| **3. Caminhos de assets quebrados pelo terminal scratch** | `TerminalSession.spawn()` (`app/terminal.py:121,144`) inicia o shell em `~/.cka-arena/scratch/<tab_id>`, mas o seed `scenarios/seed/ca-helm-upgrade.json` instrui usar `scenarios/seed/assets/helm-chart` (caminho relativo à raiz do repo). Nos `check_runs` reais do DB, há 2 falhas consecutivas nesse seed. | O usuário no terminal integrado não encontra o chart Helm nem overlays Kustomize sem navegar manualmente para fora da sandbox do scratch. |
-| **4. Modo `mock_exam` e flag `destructive` incompletos** | `app/sessions.py:95` grava `mode = "study"` hardcoded; `sessions.get()` não expõe `ssh_target` nem `destructive`; `static/js/workspace.js:98` hardcoda `ssh cka-node01` e esconde questões `destructive` sem fluxo específico. Além disso, o último relatório de `Check` some ao recarregar a página (F5). | Impossível fazer simulado completo cronometrado (120 min, navegação livre entre questões, Flag for Review, score ≥ 66%), e cenários de `etcd restore` / `kubeadm upgrade` continuam sem fluxo seguro de L2. |
-| **5. Botão `Check` ausente na barra do terminal** | `README.md`, `PLAN.md` e `GAP_ANALYSIS.md` prometem um botão `Check` direto na barra de rodapé do terminal. Em `static/index.html:80-94`, o footer do terminal só tem `+ Shell`, `term-workdir`, `Native` e `Clear`. | Menor ergonomia durante o uso exclusivo do painel direito (embora `⌘↵` funcione globalmente). |
-| **6. Concorrência sem governança de Cluster Lease** | `app/main.py:43-44` instancia dois `ScenarioEngine()` distintos (`pipeline` e `sessions`). Não há lock/lease impedindo rodar geração com IA ao mesmo tempo que uma sessão de prática ativa, `reset-baseline` ou `power stop`. Também não há endpoint `POST /api/generate/cancel`, deixando 4 `generation_requests` presos como `running` no DB. | Risco real de uma geração alterar nós (`kubelet` stop, taints) ou consumir recursos durante uma sessão de prova do usuário, além de jobs zumbis pós-restart. |
-| **7. `teardown.py` acoplado a SSH + gargalo no `MultipassProvider`** | `app/teardown.py` chama `ssh_runner.sudo_run(ip, ...)` diretamente em vez de usar `provider.get().exec(..., sudo=True)`, quebrando L1/L2/drift no driver `kind` (WSL2). `MultipassProvider.exec()` (`app/provider/multipass.py:34`) chama `self.nodes()` (subindo `multipass list` + TCP probes em 3 VMs) a **cada comando SSH**, sem cache TTL nem `ControlMaster`. | `teardown` incompatível com WSL2/kind; overhead evitável de centenas de ms por comando de nó; `reset_clean` só limpa um taint hardcoded (`cka-arena/practice=critical:NoSchedule-`). |
-| **8. `llm_client.py` + higiene de projeto** | `save_config()` (`app/llm_client.py:279-288`) descarta `thinking` e `reasoning_effort` do JSON salvo; sem preset para **Ollama** local (apesar de citado no `PLAN.md`) nem input livre de modelo; `httpx.AsyncClient` recriado por requisição; `data/arena.db` (0 bytes) e YAMLs soltos na raiz (`deploy.yaml`, `role.yaml`, `rolebinding.yaml`); tabelas mortas `terminal_sessions`/`command_audit` (0 linhas); teste inativo em `tests/test_composer.py:89` (`if False`); mensagens em PT-BR vazando de `validator.py` para a UI 100% inglês. | Impossível controlar `thinking` ou usar Ollama pela UI; acúmulo de artefatos mortos e inconsistência de idioma nas evidências de erro. |
+| **1. Question telemetry completely disconnected** | `app/sessions.py` never updates `bank_questions.times_used`, `last_used_at`, `first_try_pass_count` nor `avg_solve_seconds` (all `0`/`NULL` across the 135 DB rows). `bank.draw_exam_sample()` (`app/bank.py:137-139`) does not return `weight_pct`, making `sessions.total_weight` recorded as `0` in all 9 sessions. | The anti-repetition exam-weight draw (`ORDER BY times_used`) is null; the mock exam percentage (`earned_weight / total_weight`) does not work; broken or badly calibrated questions are never detected over time. |
+| **2. Zero bank curation / quarantine management** | `app/main.py` exposes only `/api/bank/coverage` and `/api/bank/preview`. There are no endpoints or UI to list, filter, inspect `drafts`, view `probe_result_json`, re-probe, repair, retire (`retired`) or delete questions. | The 71 `drafts` and duplicated clones stay trapped in SQLite as a "black hole"; if a published question has a bug in its prompt/check during practice, the user has no "Report / Retire" button. |
+| **3. Asset paths broken by the scratch terminal** | `TerminalSession.spawn()` (`app/terminal.py:121,144`) starts the shell in `~/.cka-arena/scratch/<tab_id>`, but the seed `scenarios/seed/ca-helm-upgrade.json` instructs using `scenarios/seed/assets/helm-chart` (a path relative to the repo root). In the real DB `check_runs`, there are 2 consecutive failures on that seed. | The user in the integrated terminal cannot find the Helm chart or Kustomize overlays without manually navigating outside the scratch sandbox. |
+| **4. `mock_exam` mode and `destructive` flag incomplete** | `app/sessions.py:95` records `mode = "study"` hardcoded; `sessions.get()` does not expose `ssh_target` or `destructive`; `static/js/workspace.js:98` hardcodes `ssh cka-node01` and hides `destructive` questions without a dedicated flow. Also, the last `Check` report disappears on page reload (F5). | Impossible to run a full timed mock exam (120 min, free navigation between questions, Flag for Review, score ≥ 66%), and `etcd restore` / `kubeadm upgrade` scenarios still lack a safe L2 flow. |
+| **5. `Check` button missing on the terminal bar** | `README.md`, `PLAN.md` and `GAP_ANALYSIS.md` promise a `Check` button directly on the terminal footer bar. In `static/index.html:80-94`, the terminal footer only has `+ Shell`, `term-workdir`, `Native` and `Clear`. | Worse ergonomics when using only the right panel (though `⌘↵` works globally). |
+| **6. Concurrency without Cluster Lease governance** | `app/main.py:43-44` instantiates two distinct `ScenarioEngine()`s (`pipeline` and `sessions`). There is no lock/lease preventing running AI generation at the same time as an active practice session, `reset-baseline` or `power stop`. There is also no `POST /api/generate/cancel` endpoint, leaving 4 `generation_requests` stuck as `running` in the DB. | Real risk of a generation altering nodes (`kubelet` stop, taints) or consuming resources during a user exam session, plus zombie jobs after restart. |
+| **7. `teardown.py` coupled to SSH + `MultipassProvider` bottleneck** | `app/teardown.py` calls `ssh_runner.sudo_run(ip, ...)` directly instead of using `provider.get().exec(..., sudo=True)`, breaking L1/L2/drift on the `kind` driver (WSL2). `MultipassProvider.exec()` (`app/provider/multipass.py:34`) calls `self.nodes()` (running `multipass list` + TCP probes on 3 VMs) on **every SSH command**, with no TTL cache or `ControlMaster`. | `teardown` incompatible with WSL2/kind; avoidable overhead of hundreds of ms per node command; `reset_clean` only clears one hardcoded taint (`cka-arena/practice=critical:NoSchedule-`). |
+| **8. `llm_client.py` + project hygiene** | `save_config()` (`app/llm_client.py:279-288`) drops `thinking` and `reasoning_effort` from the saved JSON; no preset for local **Ollama** (despite being cited in `PLAN.md`) nor free-form model input; `httpx.AsyncClient` recreated per request; `data/arena.db` (0 bytes) and stray YAMLs in the root (`deploy.yaml`, `role.yaml`, `rolebinding.yaml`); dead tables `terminal_sessions`/`command_audit` (0 rows); disabled test in `tests/test_composer.py:89` (`if False`); pt-BR messages leaking from `validator.py` into a 100% English UI. | Impossible to control `thinking` or use Ollama from the UI; accumulation of dead artifacts and language inconsistency in error evidence. |
 
 ---
 
-## 3. Arquitetura Alvo Proposta (Geração v2 + Plataforma Governada)
+## 3. Proposed Target Architecture (Generation v2 + Governed Platform)
 
-Para resolver os três problemas de raiz, o pipeline sai do modelo *"prompt genérico + colagem de fragmentos desconexos"* para uma arquitetura **Blueprint-Guided + Incidentes Causais Coesos + Cluster Lease**:
+To solve the three root problems, the pipeline moves from the *"generic prompt + gluing of disconnected fragments"* model to a **Blueprint-Guided + Cohesive Causal Incidents + Cluster Lease** architecture:
 
 ```mermaid
 flowchart TD
-    UI["Scenario Studio\n(domínios · dificuldade · qtd · foco)"] --> LEASE{"Cluster Lease\n(livre de sessão/reset?)"}
-    LEASE -->|ocupado| REJECT["409 Conflict claro na UI"]
-    LEASE -->|livre| A["Estágio A · Normalizador + Slot Planner\n• Lê grade 5×3 e últimos 30 títulos do DB\n• Sorteia arquétipo CNCF distinto por slot\n• Atribui namespace neutro + exemplar few-shot"]
+    UI["Scenario Studio\n(domains · difficulty · count · focus)"] --> LEASE{"Cluster Lease\n(free of session/reset?)"}
+    LEASE -->|busy| REJECT["409 Conflict made clear in the UI"]
+    LEASE -->|free| A["Stage A · Normalizer + Slot Planner\n• Reads 5×3 grid and last 30 titles from the DB\n• Draws a distinct CNCF archetype per slot\n• Assigns neutral namespace + few-shot exemplar"]
 
-    A --> STRAT{"Estratégia por Tier"}
-    STRAT -->|exam_standard / killer_hardcore| B1["Estágio B · Construtor Blueprint-Guided\n(histórico assistant preservado nos retries)"]
-    STRAT -->|boss_fight| B2["Estágio B · Causal Incident Engine\n(incidentes multi-camada coesos no mesmo app)"]
+    A --> STRAT{"Strategy per Tier"}
+    STRAT -->|exam_standard / killer_hardcore| B1["Stage B · Blueprint-Guided Builder\n(assistant history preserved across retries)"]
+    STRAT -->|boss_fight| B2["Stage B · Causal Incident Engine\n(cohesive multi-layer incidents in the same app)"]
 
-    B1 --> D["Estágio D1/D2 · Gates Determinísticos (0 LLM)\n• YAML + JSON -p + imutabilidade + anti-spoiler\n• LIST-mode .items[*] + must_fail timeout + docs_links\n• dry-run=server em setup E solution"]
+    B1 --> D["Stage D1/D2 · Deterministic Gates (0 LLM)\n• YAML + JSON -p + immutability + anti-spoiler\n• LIST-mode .items[*] + must_fail timeout + docs_links\n• dry-run=server on BOTH setup AND solution"]
     B2 --> D
 
-    D -->|erro estrutural| B_FIX["Retry direcionado (fast)"]
+    D -->|structural error| B_FIX["Targeted retry (fast)"]
     B_FIX --> D
-    D -->|ok| C["Estágio C · Revisor Frio (flash)\n• Rubrica semântica + anti-spoiler + exam voice"]
+    D -->|ok| C["Stage C · Cold Reviewer (flash)\n• Semantic rubric + anti-spoiler + exam voice"]
     C -->|patch (≤1x)| B_FIX
     C -->|approve| E
 
-    E["Estágio E · Solvability Probe v2\n• Namespace efêmero cka-prove-<slot> (paralelo ≤2 ns-scoped)\n• Smart Settle event-driven (TerminalFault sai em 2-4s)\n• Warm Probe Pod (cka-arena-system) quando sem NetPol\n• Captura Live Digest (pods/events/logs/svc/pvc) PRÉ-cleanup"]
+    E["Stage E · Solvability Probe v2\n• Ephemeral namespace cka-prove-<slot> (parallel ≤2 ns-scoped)\n• Smart Settle event-driven (TerminalFault exits in 2-4s)\n• Warm Probe Pod (cka-arena-system) when no NetPol\n• Captures Live Digest (pods/events/logs/svc/pvc) PRE-cleanup"]
 
-    E -->|falha infra real| RETRY_INFRA["Retry de infra (sem queimar orçamento)"]
-    E -->|falha conteúdo| REPAIR["Repair Cirúrgico (1º fast → 2º deep)\ncom Live Digest real + matriz completa"]
+    E -->|real infra failure| RETRY_INFRA["Infra retry (without burning budget)"]
+    E -->|content failure| REPAIR["Surgical Repair (1st fast → 2nd deep)\nwith real Live Digest + full matrix"]
     REPAIR --> D
     E -->|100% PASS| PUB[("bank_questions\nstate: published")]
-    REPAIR -->|orçamento esgotado| DRAFT[("bank_questions\nstate: draft + histórico\n(1 registro final por slot)")]
+    REPAIR -->|budget exhausted| DRAFT[("bank_questions\nstate: draft + history\n(1 final record per slot)")]
 ```
 
-### 5 Princípios da Nova Arquitetura
+### 5 Principles of the New Architecture
 
-1. **Planejamento Curricular Explícito (Slot Planner antes do Builder):** nunca pedir à LLM para "inventar qualquer questão". Cada slot nasce com domínio, arquétipo do currículo CNCF 2025/2026, pitfalls específicos do tópico, namespace corporativo neutro e lista `avoid_recent` real do banco.
-2. **Coesão sobre Colagem (fim do Frankenstein Composer):** questões `killer_hardcore` e `boss_fight` devem representar um único sistema/incidente realista em 1–2 namespaces de negócio, com dependências reais entre as tarefas (ex.: `kubelet` → `PVC/Pod` → `Service` → `NetworkPolicy/HTTPRoute`).
-3. **Falhar Rápido e Barato Antes do Cluster:** `Gates D1/D2` (incluindo `dry-run=server` da solução) executam **antes** do `Reviewer C` e do `Probe E`. Erros sintáticos/semânticos nunca chegam a tocar as VMs nem pagam chamada de Reviewer.
-4. **Memória Completa + Observabilidade Viva:** retries mantêm a resposta `assistant` no contexto; o `_repair()` recebe `events`, `logs`, `Pod conditions` e `Endpoints` capturados **antes** do `cleanup()`.
-5. **Cluster como Recurso Compartilhado Governado:** isolamento por namespace efêmero no probe, Smart Settle orientado a eventos do Pod, Warm Probe Pod compartilhado e `ClusterLease` unificando sessão, geração e reset.
-
----
-
-## 4. Plano Detalhado de Melhorias em 6 Frentes (P0 → P2)
-
-### Frente 1 (P0) — Correção de Bugs Críticos do Pipeline & Quarentena Imediata
-**Objetivo:** Estancar imediatamente os bugs determinísticos que causam quarentena em massa, amnésia de reparo e desperdício de tempo.
-
-- **Mudanças Técnicas:**
-  1. **Preservar histórico `assistant` em `app/pipeline.py:_build_one`:**
-     Antes de cada `messages.append({"role": "user", ...})` nas linhas 612, 641, 655 e 697, anexar `{"role": "assistant", "content": text}` (compactando apenas rodadas antigas caso ultrapasse o limite de janela, mantendo sempre o último envelope completo).
-  2. **Captura de `live_digest` pré-cleanup (`app/pipeline.py:_probe_locked` e `app/scenario_engine.py:namespace_digest`):**
-     - Capturar `digest = await self.engine.namespace_digest(env.setup.namespaces)` **dentro de `_probe_locked` antes do `finally: cleanup(env)`** sempre que sanity ou final falharem por conteúdo, devolvendo-o junto ao resultado do probe (ou armazenando no relatório da tentativa).
-     - Enriquecer `namespace_digest()` com: `events` recentes de Warning (`kubectl get events -n <ns> --field-selector type=Warning`), `conditions` de Pods `Pending` (`Unschedulable` message), últimos 15 lines de `logs` em `CrashLoopBackOff`, e status de `PersistentVolumeClaim` (`phase`, `storageClassName`).
-  3. **Correções imediatas em `app/validator.py`:**
-     - **Corrigir `len_gte` (`linha 66-68`):** usar `items = [part for part in re.split(r"[\s,]+", actual) if part.strip()]` para aceitar saídas separadas por espaço, quebra de linha ou vírgula do `kubectl jsonpath`.
-     - **Separar `INVALID` de `ERROR` (`linha 438-439`):** criar status/classificação clara para erros causados por parâmetros inválidos do check (`KeyError`, `TypeError`, `ValueError`, `re.error`) — tratar como falha de **conteúdo** (`kind="content"`), nunca como `infra_error`, evitando os 3 retries inúteis de check + 3 retries de probe.
-     - **Alinhar timeout de `ephemeral_probe`:** elevar `TIMEOUTS["pod_exec_exit_zero"]` / `pod_exec_must_fail` para `45s` quando `ephemeral_probe` for verdadeiro (ou passar a usar o Warm Probe Pod da Frente 3), garantindo que `asyncio.wait_for` no `run_check` não mate o `_probe_run` antes do timeout interno.
-     - **Padronizar mensagens em inglês:** traduzir as strings `reason`/`error` em `validator.py` (atualmente em PT-BR, ex.: `"nenhum pod corresponde ao selector"`, `"arquivo não existe"`) para manter a UI 100% em inglês conforme `PRODUCT.md`.
-  4. **Completar contrato e regras no `BUILDER_SYSTEM` (`app/pipeline.py:116-189`):**
-     - Incluir `commands` em `setup` e `cleanup`, e `node_commands` em `solution` dentro do `OUTPUT CONTRACT` JSON.
-     - Documentar explicitamente a sintaxe obrigatória do LIST mode em `kubectl_jsonpath`: quando `name` for vazio e `label_selector` estiver preenchido, o `jsonpath` **deve** iterar sobre `.items[*]` (ex.: `{.items[*].spec.nodeName}`).
-     - Proibir explicitamente `kubectl patch` em campos imutáveis de `PVC` (`storageClassName`, `accessModes`, `selector`) e `Pod` (`spec.volumes`, `spec.containers[*].ports` imutáveis via patch simples) — orientar `solution.commands` com delete + `solution.manifests`.
-  5. **Reordenar e endurecer os Gates (`app/pipeline.py:_build_one` e `_gates`):**
-     - **Ordem nova:** `Schema (Pydantic)` → `Clamp de banda` → **`Gates D1 (estático) + D2 (dry-run server)`** → **`Reviewer C`** → **`Probe E`**. Não gastar chamadas LLM do Revisor em envelopes que já reprovam nos gates determinísticos.
-     - Rodar `kubectl apply --dry-run=server -f -` também em `env.solution.manifests` (não só em `setup.manifests`).
-     - Validar sintaxe JSON em payloads `-p`/`--patch` de `setup.commands`, `solution.commands` e `cleanup.commands`.
-     - Rejeitar `kubectl patch` direcionado a campos imutáveis conhecidos (`pvc` mudando `storageClassName`/`accessModes`, `pod` mudando `volumes`).
-     - Validar que `kubectl_jsonpath` em LIST mode (`not name and selector`) contém `items` no `jsonpath`.
-     - Validar que `pod_exec_must_fail` inclui flag/comando de timeout (`--max-time`, `-w`, `-W`, `timeout`).
-     - Validar `docs_links` não-vazio com URLs sob domínios permitidos (`kubernetes.io`, `helm.sh`, `gateway-api.sigs.k8s.io`).
-     - Gate heurístico **Anti-Spoiler**: verificar se a parte narrativa antes de `Perform the following tasks:` contém padrões literais de diagnóstico/correção proibidos (ex.: `"because its selector"`, `"because the command exits"`, `"missing tag"`, `"patch"`, `"remove the"`) e encaminhar ao Reviewer C a checagem explícita desse critério.
-  6. **Eliminar poluição de drafts intermediários & corrigir hotfix do `_narrate()`:**
-     - Gravar `bank.publish_question(..., state="draft")` **somente uma vez** ao final de `_build_one` / `_compose_one` quando o slot esgotar todas as tentativas (armazenando um resumo estruturado das últimas falhas no `probe_result_json`).
-     - No `_narrate()` (`app/pipeline.py:796-797`), validar apenas os namespaces presentes em `setup.namespaces` (nunca namespaces fictícios de unidades `node_scoped`).
-
-- **Impacto Esperado:** Redução imediata da quarentena de ~60% para ~20–25% antes mesmo da troca do motor de geração; eliminação de ~40% das chamadas perdidas de LLM-C e de retries cegos no repair.
-- **Critérios de Aceite:** Testes unitários cobrindo `assistant` no histórico, `len_gte` com espaço/newline, `INVALID` sem retry de infra, `live_digest` capturado pré-cleanup e dry-run em `solution.manifests`; lote de 5 `exam_standard` reduzindo quarentena para ≤ 1/5.
+1. **Explicit Curriculum Planning (Slot Planner before the Builder):** never ask the LLM to "invent any question". Each slot is born with a domain, an archetype from the CNCF 2025/2026 curriculum, topic-specific pitfalls, a neutral corporate namespace and a real `avoid_recent` list from the bank.
+2. **Cohesion over Gluing (end of the Frankenstein Composer):** `killer_hardcore` and `boss_fight` questions must represent a single realistic system/incident in 1–2 business namespaces, with real dependencies between tasks (e.g. `kubelet` → `PVC/Pod` → `Service` → `NetworkPolicy/HTTPRoute`).
+3. **Fail Fast and Cheap Before the Cluster:** `Gates D1/D2` (including `dry-run=server` of the solution) run **before** the `Reviewer C` and the `Probe E`. Syntactic/semantic errors never touch the VMs nor pay for a Reviewer call.
+4. **Full Memory + Live Observability:** retries keep the `assistant` response in context; `_repair()` receives `events`, `logs`, `Pod conditions` and `Endpoints` captured **before** `cleanup()`.
+5. **Cluster as a Governed Shared Resource:** ephemeral-namespace isolation in the probe, event-driven Smart Settle on Pod state, shared Warm Probe Pod, and a `ClusterLease` unifying session, generation and reset.
 
 ---
 
-### Frente 2 (P0) — Nova Arquitetura de Geração com IA: Blueprint-Guided + Incidentes Coesos
-**Objetivo:** Acabar com questões Frankenstein, clones repetidos, viés de domínio (12/14 em S&N) e spoilers no enunciado.
+## 4. Detailed Improvement Plan in 6 Fronts (P0 → P2)
 
-- **Mudanças Técnicas:**
-  1. **Catálogo Curricular (`app/curriculum.py` — novo):**
-     Modelar ~35–40 arquétipos oficiais do currículo CNCF CKA 2025/2026 distribuídos pelos 5 domínios, cada um com:
+### Front 1 (P0) — Critical Pipeline Bug Fixes & Immediate Quarantine Relief
+**Goal:** Immediately stop the deterministic bugs causing mass quarantine, repair amnesia and wasted time.
+
+- **Technical Changes:**
+  1. **Preserve `assistant` history in `app/pipeline.py:_build_one`:**
+     Before each `messages.append({"role": "user", ...})` on lines 612, 641, 655 and 697, append `{"role": "assistant", "content": text}` (compacting only old rounds if the window limit is exceeded, always keeping the last complete envelope).
+  2. **Capture `live_digest` pre-cleanup (`app/pipeline.py:_probe_locked` and `app/scenario_engine.py:namespace_digest`):**
+     - Capture `digest = await self.engine.namespace_digest(env.setup.namespaces)` **inside `_probe_locked` before the `finally: cleanup(env)`** whenever sanity or final fail on content, returning it alongside the probe result (or storing it in the attempt report).
+     - Enrich `namespace_digest()` with: recent Warning `events` (`kubectl get events -n <ns> --field-selector type=Warning`), `conditions` of `Pending` Pods (`Unschedulable` message), the last 15 lines of `logs` in `CrashLoopBackOff`, and `PersistentVolumeClaim` status (`phase`, `storageClassName`).
+  3. **Immediate fixes in `app/validator.py`:**
+     - **Fix `len_gte` (lines 66-68):** use `items = [part for part in re.split(r"[\s,]+", actual) if part.strip()]` to accept output separated by space, newline or comma from `kubectl jsonpath`.
+     - **Separate `INVALID` from `ERROR` (lines 438-439):** create a clear status/classification for errors caused by invalid check parameters (`KeyError`, `TypeError`, `ValueError`, `re.error`) — treat as a **content** failure (`kind="content"`), never as `infra_error`, avoiding the 3 useless check retries + 3 probe retries.
+     - **Align `ephemeral_probe` timeout:** raise `TIMEOUTS["pod_exec_exit_zero"]` / `pod_exec_must_fail` to `45s` when `ephemeral_probe` is true (or switch to the Warm Probe Pod of Front 3), ensuring `asyncio.wait_for` in `run_check` does not kill `_probe_run` before its internal timeout.
+     - **Standardize messages in English:** translate the `reason`/`error` strings in `validator.py` (currently pt-BR, e.g. `"nenhum pod corresponde ao selector"`, `"arquivo não existe"`) to keep the UI 100% English per `PRODUCT.md`.
+  4. **Complete contract and rules in `BUILDER_SYSTEM` (`app/pipeline.py:116-189`):**
+     - Include `commands` in `setup` and `cleanup`, and `node_commands` in `solution` inside the JSON `OUTPUT CONTRACT`.
+     - Explicitly document the mandatory LIST-mode syntax of `kubectl_jsonpath`: when `name` is empty and `label_selector` is set, the `jsonpath` **must** iterate over `.items[*]` (e.g. `{.items[*].spec.nodeName}`).
+     - Explicitly forbid `kubectl patch` on immutable `PVC` fields (`storageClassName`, `accessModes`, `selector`) and `Pod` (`spec.volumes`, `spec.containers[*].ports` immutable via simple patch) — guide toward `solution.commands` with delete + `solution.manifests`.
+  5. **Reorder and harden the Gates (`app/pipeline.py:_build_one` and `_gates`):**
+     - **New order:** `Schema (Pydantic)` → `Band clamp` → **`Gates D1 (static) + D2 (server dry-run)`** → **`Reviewer C`** → **`Probe E`**. Never spend Reviewer LLM calls on envelopes that already fail the deterministic gates.
+     - Run `kubectl apply --dry-run=server -f -` also on `env.solution.manifests` (not only `setup.manifests`).
+     - Validate JSON syntax in `-p`/`--patch` payloads of `setup.commands`, `solution.commands` and `cleanup.commands`.
+     - Reject `kubectl patch` targeting known immutable fields (`pvc` changing `storageClassName`/`accessModes`, `pod` changing `volumes`).
+     - Validate that `kubectl_jsonpath` in LIST mode (`not name and selector`) contains `items` in the `jsonpath`.
+     - Validate that `pod_exec_must_fail` includes a timeout flag/command (`--max-time`, `-w`, `-W`, `timeout`).
+     - Validate non-empty `docs_links` with URLs under allowed domains (`kubernetes.io`, `helm.sh`, `gateway-api.sigs.k8s.io`).
+     - Heuristic **Anti-Spoiler** gate: verify whether the narrative part before `Perform the following tasks:` contains literal forbidden diagnosis/fix patterns (e.g. `"because its selector"`, `"because the command exits"`, `"missing tag"`, `"patch"`, `"remove the"`) and forward that criterion explicitly to Reviewer C.
+  6. **Eliminate intermediate draft pollution & fix the `_narrate()` hotfix:**
+     - Write `bank.publish_question(..., state="draft")` **only once** at the end of `_build_one` / `_compose_one` when the slot exhausts all attempts (storing a structured summary of the last failures in `probe_result_json`).
+     - In `_narrate()` (`app/pipeline.py:796-797`), validate only the namespaces present in `setup.namespaces` (never fictional `node_scoped` unit namespaces).
+
+- **Expected Impact:** Immediate quarantine reduction from ~60% to ~20–25% even before swapping the generation engine; elimination of ~40% of lost LLM-C calls and of blind retries in repair.
+- **Acceptance Criteria:** Unit tests covering `assistant` in history, `len_gte` with space/newline, `INVALID` without infra retry, `live_digest` captured pre-cleanup and dry-run on `solution.manifests`; batch of 5 `exam_standard` reducing quarantine to ≤ 1/5.
+
+---
+
+### Front 2 (P0) — New AI Generation Architecture: Blueprint-Guided + Cohesive Incidents
+**Goal:** End Frankenstein questions, repeated clones, domain bias (12/14 in S&N) and spoilers in the question prompt.
+
+- **Technical Changes:**
+  1. **Curriculum Catalog (`app/curriculum.py` — new):**
+     Model ~35–40 official archetypes from the CNCF CKA 2025/2026 curriculum across the 5 domains, each with:
      - `id`, `domain`, `subtopics`, `allowed_difficulties`
      - `requires_addons` (`gateway`, `metrics-server`, `local-path`, `helm`, `etcdctl`, `network_policy`)
      - `needs_node_ssh`, `destructive`
-     - `example_seed_id` (referência a um seed real validado ou template estrutural para few-shot dinâmico)
-     - `pitfalls`: orientações técnicas precisas para evitar falhas de LLM naquele tópico (ex.: *Gateway API `Accepted` vs `Programmed=False` sem LoadBalancer*; *Kustomize `kubectl apply -k`*; *Native Sidecar `initContainers` com `restartPolicy: Always`*; *PVC `WaitForFirstConsumer` só faz bind após Pod schedulable*; *NetworkPolicy com Egress exige `kube-system` UDP/TCP 53*).
-  2. **Slot Planner Ciente do Banco (`app/planner.py` — novo, integrado ao Estágio A):**
-     - Ao receber `GenerateRequest`, lê a matriz 5×3 atual do banco (`bank.coverage()`) e os últimos 30 títulos/arquétipos publicados.
-     - Distribui os `N` slots entre os domínios selecionados priorizando células vazias/deficitárias e sorteia um **arquétipo distinto por slot** (filtrando pelos addons disponíveis retornados pelo `ClusterDoctor` e pelas `constraints` do `focus_hint`).
-     - Atribui a cada slot um **namespace neutro de negócio** vindo de um pool realista (`checkout`, `billing`, `orders`, `inventory`, `edge-gw`, `auth-core`, `catalog`, `payments`, `telemetry`, `media`), acrescentando sufixo curto aleatório no probe quando necessário. **Proibido** usar nomes de falha no namespace (`crashloop`, `wrong-claim`, `svc-selector`).
-     - Injeta `avoid_recent` com títulos reais do banco + títulos planejados nos slots irmãos.
-  3. **Few-Shot Dinâmico por Domínio/Tier no Builder (`app/pipeline.py`):**
-     Remover o `SOLVABLE PATTERN` fixo de `web-svc` e o `_HARD_EXAMPLE` único de NetworkPolicy do prompt global. Injetar dinamicamente o exemplar seed mais próximo do `archetype` sorteado para aquele slot (ex.: seed Storage para Storage, seed Helm/RBAC/etcd para Cluster Arch, seed Taint/Resources para Workloads).
-  4. **Substituir o Frankenstein Composer (`app/composer.py` / `app/fault_units.py`):**
-     - **`exam_standard` e `killer_hardcore`:** passam a ser gerados integralmente via **Blueprint-Guided LLM** (arquétipos de complexidade calibrada: 1–2 requisitos em 1 namespace para `exam_standard`; 3–4 requisitos interligados + ≥ 1 armadilha justa em 1–2 namespaces para `killer_hardcore`).
-     - **`boss_fight` via Causal Incident Blueprints:** substituir a colagem aleatória de 5 falhas desconexas por **blueprints de incidentes multi-camada coesos** (6–8 arquiteturas onde todas as falhas pertencem ao mesmo sistema/fluxo):
-       - *Exemplo A (Node + Workload + Exposure):* `kubelet` parado/configurado errado em `node01` + Deployment com `nodeAffinity`/taint + Service com `targetPort` errado + verificação HTTP de ponta a ponta.
-       - *Exemplo B (Control-Plane/Static Pod + Workloads + Rollout):* manifesto estático/CoreDNS ou probe quebrado + Deployment com resource/command inválido + verificação pós-recuperação.
-       - *Exemplo C (Storage + RBAC + Gateway/NetworkPolicy):* `PV` com `claimRef`/StorageClass + app que depende do PVC + `NetworkPolicy`/`HTTPRoute` com prova negativa e positiva.
-       - A LLM preenche nomes neutros, manifestos, sintomas sem spoiler e referência didática sobre o blueprint causal, e o Solvability Probe prova que o conserto encadeado resolve 100% dos checks.
-     - Refatorar `fault_units.py` (removendo spoilers dos nomes/sintomas, resolvendo a colisão do PV `pv-data` e aplicando `CHECK_LIMIT`) para uso exclusivo em modo fallback offline (quando não houver chave LLM) ou testes unitários.
-  5. **Repair em 2 velocidades e observabilidade completa (`app/pipeline.py:_repair`):**
-     - 1ª tentativa de `_repair()`: rodar em **modo `fast` (`deep=False`)** — com o `live_digest` completo e a matriz de checks, erros mecânicos são corrigidos em ~4–6s em vez de ~60s.
-     - 2ª tentativa de `_repair()` (se a 1ª falhar): acionar **`deep=True`** (reasoning).
-     - Registrar todas as chamadas de `_repair()` e `_narrate()` na tabela `llm_generations` (com `stage="R"` e `stage="N"`).
+     - `example_seed_id` (reference to a validated real seed or a structural template for dynamic few-shot)
+     - `pitfalls`: precise technical guidance to avoid LLM failures on that topic (e.g. *Gateway API `Accepted` vs `Programmed=False` without LoadBalancer*; *Kustomize `kubectl apply -k`*; *Native Sidecar `initContainers` with `restartPolicy: Always`*; *PVC `WaitForFirstConsumer` only binds after the Pod is schedulable*; *NetworkPolicy with Egress requires `kube-system` UDP/TCP 53*).
+  2. **Bank-Aware Slot Planner (`app/planner.py` — new, integrated into Stage A):**
+     - On receiving a `GenerateRequest`, read the current 5×3 matrix from the bank (`bank.coverage()`) and the last 30 published titles/archetypes.
+     - Distribute the `N` slots across the selected domains prioritizing empty/deficient cells, and draw a **distinct archetype per slot** (filtered by the addons available returned by `ClusterDoctor` and by the `constraints` of `focus_hint`).
+     - Assign each slot a **neutral business namespace** from a realistic pool (`checkout`, `billing`, `orders`, `inventory`, `edge-gw`, `auth-core`, `catalog`, `payments`, `telemetry`, `media`), adding a short random suffix in the probe when needed. **Forbidden** to use fault names in the namespace (`crashloop`, `wrong-claim`, `svc-selector`).
+     - Inject `avoid_recent` with real bank titles + titles planned for sibling slots.
+  3. **Dynamic Few-Shot per Domain/Tier in the Builder (`app/pipeline.py`):**
+     Remove the fixed `web-svc` `SOLVABLE PATTERN` and the single NetworkPolicy `_HARD_EXAMPLE` from the global prompt. Dynamically inject the seed exemplar closest to the drawn `archetype` for that slot (e.g. a Storage seed for Storage, a Helm/RBAC/etcd seed for Cluster Arch, a Taint/Resources seed for Workloads).
+  4. **Replace the Frankenstein Composer (`app/composer.py` / `app/fault_units.py`):**
+     - **`exam_standard` and `killer_hardcore`:** become fully generated via **Blueprint-Guided LLM** (archetypes with calibrated complexity: 1–2 requirements in 1 namespace for `exam_standard`; 3–4 interlinked requirements + ≥ 1 fair trap in 1–2 namespaces for `killer_hardcore`).
+     - **`boss_fight` via Causal Incident Blueprints:** replace the random gluing of 5 disconnected faults with **cohesive multi-layer incident blueprints** (6–8 architectures where all faults belong to the same system/flow):
+       - *Example A (Node + Workload + Exposure):* `kubelet` stopped/misconfigured on `node01` + Deployment with `nodeAffinity`/taint + Service with wrong `targetPort` + end-to-end HTTP verification.
+       - *Example B (Control-Plane/Static Pod + Workloads + Rollout):* broken static manifest/CoreDNS or probe + Deployment with invalid resource/command + post-recovery verification.
+       - *Example C (Storage + RBAC + Gateway/NetworkPolicy):* `PV` with `claimRef`/StorageClass + app depending on the PVC + `NetworkPolicy`/`HTTPRoute` with negative and positive checks.
+       - The LLM fills in neutral names, manifests, spoiler-free symptoms and didactic reference about the causal blueprint, and the Solvability Probe proves the chained fix resolves 100% of the checks.
+     - Refactor `fault_units.py` (removing spoilers from names/symptoms, fixing the `pv-data` PV collision and enforcing `CHECK_LIMIT`) for exclusive use in offline fallback mode (when there is no LLM key) or unit tests.
+  5. **Two-speed repair and full observability (`app/pipeline.py:_repair`):**
+     - 1st `_repair()` attempt: run in **`fast` mode (`deep=False`)** — with the complete `live_digest` and the check matrix, mechanical errors are fixed in ~4–6s instead of ~60s.
+     - 2nd `_repair()` attempt (if the first fails): trigger **`deep=True`** (reasoning).
+     - Log all `_repair()` and `_narrate()` calls in the `llm_generations` table (with `stage="R"` and `stage="N"`).
 
-- **Impacto Esperado:** Questões diversas nos 5 domínios, fim das questões Frankenstein e dos clones idênticos, zero spoilers nos enunciados e taxa de publicação > 90%.
-- **Critérios de Aceite:** Gerar lote misto (`exam_standard` + `killer_hardcore` + `boss_fight`) cobrindo os 5 domínios sem repetição, sem fallback de título `"Repair N cluster faults"`, sem spoilers no texto de sintomas, e com cobertura de tópicos modernos (Gateway API, Helm, NetworkPolicy DNS 53, Native Sidecar, Storage).
-
----
-
-### Frente 3 (P0/P1) — Aceleração Radical do Prove-Out & Motor de Validação v2
-**Objetivo:** Reduzir o tempo de validação de minutos para segundos — tanto no Solvability Probe da geração quanto no clique do botão `Check` durante o estudo.
-
-- **Mudanças Técnicas:**
-  1. **Smart Settle orientado a estado terminal (`app/scenario_engine.py:settle`):**
-     - Em vez de checar apenas `phase in ("Pending", "Unknown")`, inspecionar `status.conditions` e `status.containerStatuses` / `initContainerStatuses` de cada pod e classificá-lo em:
-       - `Ready`: `phase == "Running"` e todos containers `ready=True`.
-       - `TerminalFault`: `PodScheduled=False` com `reason == "Unschedulable"` (Scheduling/Taint/CPU/PVC Pending), ou `waiting.reason` em `("ImagePullBackOff", "ErrImagePull", "CrashLoopBackOff", "CreateContainerConfigError", "InvalidImageName", "CreateContainerConfigError")`, ou `terminated.reason == "OOMKilled"`, ou `phase == "Failed"`.
-       - `Transitioning`: `ContainerCreating`, `PodInitializing` ou pod recém-criado sem motivo de falha ainda.
-     - **Regra de retorno rápido:** quando todos os pods estiverem em `Ready` ou `TerminalFault` (0 pods em `Transitioning`), `settle()` **retorna imediatamente** (tipicamente em **2–4s**, em vez de esperar 45s no sanity ou 60s no `Check` do usuário!).
-     - No sanity check pós-setup do probe, manter apenas uma janela curta de confirmação (ex.: 10s se um container ainda estiver baixando imagem ou iniciando pela primeira vez).
-  2. **Warm Probe Pod compartilhado (`app/validator.py`):**
-     - Criar/manter sob demanda 1 pod leve `cka-probe-runner` (imagem `curlimages/curl:8.10.1` ou `nicolaka/netshoot` / `busybox` com comando `sleep infinity`) em um namespace dedicado `cka-arena-system` (fora dos namespaces de cenário).
-     - Quando um check usa `ephemeral_probe: true` e o cenário **não** possui `NetworkPolicy` no namespace alvo (ou o check explicitamente marca `probe_scope: "external"`), executar `kubectl exec` direto no Warm Probe Pod (< 300ms por chamada em vez de 10–25s criando/deletando pod a cada poll).
-     - Quando o cenário envolve `NetworkPolicy` restritiva por namespace de origem ou exige execução dentro do namespace da questão, manter um único pod probe reutilizável no namespace durante a execução de `run_all` (ou fallback para `_probe_run` com timeout alinhado de 45s e cleanup garantido mesmo em `asyncio.CancelledError`).
-  3. **Namespaces efêmeros + Paralelismo controlado de Probes (`app/pipeline.py`):**
-     - Durante o Estágio E, para cenários namespace-scoped, reescrever temporariamente em memória o nome de cada namespace do envelope para `cka-prove-<slot>-<4hex>` antes de aplicar no cluster (sem alterar o envelope que será salvo no banco). Isso elimina 100% das colisões entre slots e esperas por `Terminating`.
-     - Substituir o `self._probe_lock` único por um **semáforo de probes namespace-scoped (`Semaphore(2)`) + lock exclusivo apenas para cenários cluster/node-scoped** (`node_commands`, `destructive`, `pv`, `clusterrole`, `taint`, `GatewayClass`).
-     - Na verificação pós-solução do probe, eliminar o duplo full-pass (`consecutive_full >= 2`) para checks puramente declarativos (`kubectl_resource_exists`, `kubectl_jsonpath` sobre spec, `kubectl_auth_can_i`, `helm_release_state`), mantendo a reconfirmação apenas para checks de runtime/rede (`pod_exec_*`, `pod_status_ready`, `node_status_ready`).
-  4. **Novos Check Types Semânticos (`app/validator.py` + `app/models.py`):**
-     Reduzir erros frágeis de `jsonpath` e regex da LLM adicionando 3 check types de alto nível (e novos operadores em `kubectl_jsonpath`):
-     - `service_endpoints_ready`: `{namespace, service_name, min_ready_addresses}` — consulta `EndpointSlice` (`discovery.k8s.io/v1` com label `kubernetes.io/service-name`) com fallback para `Endpoints`, evitando bugs de `len_gte` e `jsonpath` em IPs.
-     - `deployment_rollout_ready`: `{namespace, name, min_ready_replicas, expected_image?}` — valida geração observada, `readyReplicas` e imagem.
-     - `pvc_bound`: `{namespace, name, storage_class?, min_storage?}` — valida `phase == Bound` e propriedades de storage.
-     - Novos operadores em `kubectl_jsonpath`: `empty`, `not_empty`, `equals_int`, `not_contains`, `all_match` (verifica se todos os itens de LIST mode satisfazem um valor esperado sem precisar escrever regex `^node01( node01)*$`).
-     - Documentar suporte a `kubectl apply -k` (Kustomize) no contrato de `commands.py` e no prompt.
-
-- **Impacto Esperado:** Probe médio cai de ~150–300s para ~15–35s; lote de 5 questões cai de ~29 min para ~2–3 min; `Check` na prática responde em < 3s mesmo em cenários com pods `Pending`.
-- **Critérios de Aceite:** Benchmark ao vivo no cluster `cka` validando `settle()` < 4s em `wl-resources-too-high` e `wl-taint-toleration`; execução de check HTTP via Warm Probe < 500ms; testes unitários dos 3 novos check types e novos operadores.
+- **Expected Impact:** Diverse questions across the 5 domains, end of Frankenstein questions and identical clones, zero spoilers in prompts, publication rate > 90%.
+- **Acceptance Criteria:** Generate a mixed batch (`exam_standard` + `killer_hardcore` + `boss_fight`) covering the 5 domains without repetition, without the `"Repair N cluster faults"` title fallback, without spoilers in symptom texts, and with coverage of modern topics (Gateway API, Helm, NetworkPolicy DNS 53, Native Sidecar, Storage).
 
 ---
 
-### Frente 4 (P1) — Gestão do Banco de Questões, Quarentena & Telemetria Real
-**Objetivo:** Transformar `bank_questions` em um acervo curado, rastreável e livre de repetições ou lixo histórico.
+### Front 3 (P0/P1) — Radical Prove-Out Acceleration & Validation Engine v2
+**Goal:** Cut validation time from minutes to seconds — both in the generation Solvability Probe and in the `Check` button click during study.
 
-- **Mudanças Técnicas:**
-  1. **Instrumentar telemetria real (`app/bank.py`, `app/sessions.py`):**
-     - Incluir `weight_pct` no `SELECT` de `bank.draw_exam_sample()` (`app/bank.py:137-139`) para que `sessions.create()` grave `total_weight` real (não `0`).
-     - Ao ativar um `session_item` (`_activate`), incrementar `times_used = times_used + 1` e atualizar `last_used_at` em `bank_questions`.
-     - Ao passar no check (`sessions.check()`), atualizar `avg_solve_seconds` (média móvel ou recalculada via `session_items`) e incrementar `first_try_pass_count` quando `attempts == 1`.
-     - Melhorar o dedup semântico (`app/bank.py:envelope_hash`): além do hash exato, adicionar coluna `archetype_id` e dedup por `(archetype_id, title_normalized)` ou similaridade estrutural para evitar múltiplos clones com títulos levemente parafraseados.
-  2. **Endpoints de Curadoria & Quarentena (`app/main.py`, `app/bank.py`):**
-     - `GET /api/bank/questions`: filtros por `state` (`published|draft|retired`), `domain`, `difficulty`, `source`, busca textual, paginação e métricas (`times_used`, `avg_solve_seconds`).
-     - `GET /api/bank/questions/{id}`: retorna o `ScenarioEnvelope` completo, `probe_result_json` e `generator_meta_json`.
-     - `POST /api/bank/questions/{id}/reprobe`: roda Gates + Solvability Probe em um `draft` ou `published`; se passar, promove para `published`.
-     - `POST /api/bank/questions/{id}/repair`: executa o repair cirúrgico em um `draft` e publica se passar no probe.
-     - `POST /api/bank/questions/{id}/retire`: marca a questão como `retired` com `retired_reason` (usado pelo botão "Report issue" durante o estudo).
-     - `DELETE /api/bank/questions/{id}`: remove `draft` descartado (protegido contra exclusão de questões já referenciadas por `session_items`).
-  3. **UI de Curadoria no Studio & "Report Issue" no Workspace (`static/js/studio.js`, `static/js/workspace.js`):**
-     - Adicionar no Studio uma aba/seção **Bank & Quarantine** listando o total de questões por estado, permitindo abrir qualquer `draft` para ver o erro exato do probe e clicar em `Re-probe`, `AI Repair`, `Retire` ou `Delete`.
-     - Adicionar no Exam Workspace um botão discreto **Report / Retire** ao lado de `Skip`: se uma questão parecer ambígua ou quebrada em runtime, o usuário a aposenta na hora com motivo e desbloqueia a sequência.
-  4. **Saneamento do banco atual (`python -m app.bank prune` ou script CLI):**
-     Fornecer comando idempotente para arquivar/limpar os 71 drafts antigos, aposentar os clones duplicados (`Allow Selected Traffic Through Default Deny` ×4) e aposentar os cenários Frankenstein do Composer v5 — mantendo os 17 seeds validados e as questões LLM sadias.
+- **Technical Changes:**
+  1. **Terminal-state-driven Smart Settle (`app/scenario_engine.py:settle`):**
+     - Instead of checking only `phase in ("Pending", "Unknown")`, inspect `status.conditions` and `status.containerStatuses` / `initContainerStatuses` of each pod and classify it as:
+       - `Ready`: `phase == "Running"` and all containers `ready=True`.
+       - `TerminalFault`: `PodScheduled=False` with `reason == "Unschedulable"` (Scheduling/Taint/CPU/PVC Pending), or `waiting.reason` in `("ImagePullBackOff", "ErrImagePull", "CrashLoopBackOff", "CreateContainerConfigError", "InvalidImageName", "CreateContainerConfigError")`, or `terminated.reason == "OOMKilled"`, or `phase == "Failed"`.
+       - `Transitioning`: `ContainerCreating`, `PodInitializing` or a freshly created pod without a failure reason yet.
+     - **Fast-return rule:** when all pods are in `Ready` or `TerminalFault` (0 pods in `Transitioning`), `settle()` **returns immediately** (typically in **2–4s**, instead of waiting 45s in the sanity check or 60s in the user's `Check`!).
+     - In the post-setup sanity check of the probe, keep only a short confirmation window (e.g. 10s if a container is still pulling its image or starting for the first time).
+  2. **Shared Warm Probe Pod (`app/validator.py`):**
+     - Create/maintain on demand 1 lightweight pod `cka-probe-runner` (image `curlimages/curl:8.10.1` or `nicolaka/netshoot` / `busybox` with command `sleep infinity`) in a dedicated namespace `cka-arena-system` (outside the scenario namespaces).
+     - When a check uses `ephemeral_probe: true` and the scenario has **no** `NetworkPolicy` in the target namespace (or the check explicitly marks `probe_scope: "external"`), run `kubectl exec` directly on the Warm Probe Pod (< 300ms per call instead of 10–25s creating/deleting a pod per poll).
+     - When the scenario involves restrictive `NetworkPolicy` by source namespace or requires execution inside the question's namespace, keep a single reusable probe pod in the namespace during `run_all` (or fall back to `_probe_run` with an aligned 45s timeout and guaranteed cleanup even on `asyncio.CancelledError`).
+  3. **Ephemeral namespaces + controlled probe parallelism (`app/pipeline.py`):**
+     - During Stage E, for namespace-scoped scenarios, temporarily rewrite in memory each namespace name of the envelope to `cka-prove-<slot>-<4hex>` before applying to the cluster (without changing the envelope saved to the bank). This eliminates 100% of the collisions between slots and the waits for `Terminating`.
+     - Replace the single `self._probe_lock` with a **namespace-scoped probe semaphore (`Semaphore(2)`) + an exclusive lock only for cluster/node-scoped scenarios** (`node_commands`, `destructive`, `pv`, `clusterrole`, `taint`, `GatewayClass`).
+     - In the post-solution probe verification, drop the double full-pass (`consecutive_full >= 2`) for purely declarative checks (`kubectl_resource_exists`, `kubectl_jsonpath` over spec, `kubectl_auth_can_i`, `helm_release_state`), keeping reconfirmation only for runtime/network checks (`pod_exec_*`, `pod_status_ready`, `node_status_ready`).
+  4. **New Semantic Check Types (`app/validator.py` + `app/models.py`):**
+     Reduce fragile LLM `jsonpath` and regex errors by adding 3 high-level check types (plus new operators on `kubectl_jsonpath`):
+     - `service_endpoints_ready`: `{namespace, service_name, min_ready_addresses}` — queries `EndpointSlice` (`discovery.k8s.io/v1` with label `kubernetes.io/service-name`) with fallback to `Endpoints`, avoiding `len_gte` and `jsonpath` bugs over IPs.
+     - `deployment_rollout_ready`: `{namespace, name, min_ready_replicas, expected_image?}` — validates observed generation, `readyReplicas` and image.
+     - `pvc_bound`: `{namespace, name, storage_class?, min_storage?}` — validates `phase == Bound` and storage properties.
+     - New operators on `kubectl_jsonpath`: `empty`, `not_empty`, `equals_int`, `not_contains`, `all_match` (verifies that every LIST-mode item satisfies an expected value without needing to write a regex like `^node01( node01)*$`).
+     - Document `kubectl apply -k` (Kustomize) support in the `commands.py` contract and in the prompt.
 
-- **Impacto Esperado:** Fim da repetição cega de questões nas sessões, visibilidade total do porquê algo foi para quarentena e ciclo completo de cura/aposentadoria sem editar SQLite na mão.
-- **Critérios de Aceite:** Sessões gravando `total_weight > 0` e atualizando `times_used`/`first_try_pass_count`/`avg_solve_seconds`; fluxo completo na UI de inspecionar um `draft`, reparar/re-probar e promover ou deletar.
-
----
-
-### Frente 5 (P1/P2) — Experiência de Prática, Assets no Scratch & Modo `mock_exam`
-**Objetivo:** Completar a fidelidade ao exame CKA real (PSI/Killer.sh) e corrigir atritos práticos do workspace e terminal.
-
-- **Mudanças Técnicas:**
-  1. **Modo `mock_exam` completo (`app/sessions.py`, `static/js/studio.js`, `static/js/workspace.js`, `static/js/app.js`):**
-     - No modal **Practice**, permitir escolher entre **Study Mode** (feedback imediato Check → Next bloqueado, comportamento atual) e **Mock Exam (120 min)** (simulado realista estilo PSI/Killer.sh).
-     - Em `mock_exam`:
-       - Timer global regressivo de 120 minutos visível no header.
-       - Navegação livre entre as questões pela fila (`Q1..Q15`), botão **Flag for Review (`🚩`)** e persistência de estado por questão (questões são aplicadas/limpas sob demanda ou mantidas isoladas por namespace).
-       - Liberação de questões com `destructive: true` (com aviso explícito antes de ativar e acionamento automático de L2 ao finalizar).
-       - Relatório final com nota ponderada oficial (`earned_weight / total_weight`), linha de corte CKA (`66%` PASS/FAIL) e detalhamento por domínio.
-  2. **Disponibilidade de Assets no Terminal Scratch (`app/config.py`, `app/terminal.py`, `scenarios/seed/ca-helm-upgrade.json`):**
-     - No startup/setup da app, sincronizar `scenarios/seed/assets/` para `~/.cka-arena/assets/` (Helm charts, overlays Kustomize).
-     - Em `TerminalSession.spawn()` (`app/terminal.py:120-124`), criar symlink `assets -> ~/.cka-arena/assets` dentro de cada scratch dir `~/.cka-arena/scratch/<tab_id>/` e exportar `CKA_ASSETS=~/.cka-arena/assets`.
-     - Atualizar `ca-helm-upgrade.json` e o prompt do Construtor para referenciar `./assets/...` (funcionando tanto na raiz do repo no Probe quanto dentro de qualquer aba do terminal no browser).
-  3. **Polimento de UX no Workspace e Studio (`static/index.html`, `static/js/`):**
-     - Expor `ssh_target` e `destructive` em `SessionService.get()`. Renderizar a pill de SSH no Workspace apenas quando `ssh_target` não for nulo (ou apontar dinamicamente para `ssh cka-<ssh_target>` em vez do `ssh cka-node01` fixo em `workspace.js:98`).
-     - Incluir os resultados do último `check_run` da questão ativa no payload de `GET /api/sessions/{id}`, para que um F5 no browser não apague o drawer de diagnóstico.
-     - Adicionar botão **Cancel** (`POST /api/generate/cancel`) no Live Job Card do Studio usando `asyncio.Task.cancel()` com cleanup limpo do probe ativo.
-     - No startup (`lifespan` de `app/main.py`), marcar eventuais `generation_requests` deixados em `status='running'` de processos encerrados abruptamente como `status='aborted'`.
-     - Adicionar botão **Check ⌘↵** na barra de rodapé do terminal (`static/index.html:80-94`), alinhando a UI implementada ao especificado em `README.md`/`PLAN.md`.
-
-- **Impacto Esperado:** Experiência de simulado idêntica à prova oficial, zero falhas por caminho relativo em questões de Helm/Kustomize e controle total de jobs na UI.
-- **Critérios de Aceite:** Sessão `mock_exam` completa calculando score ponderado (`earned_weight/total_weight`); `helm upgrade` de `ca-helm-upgrade.json` executável copiando direto do terminal scratch sem `cd`; cancelamento de job limpando namespace efêmero de prova.
+- **Expected Impact:** Average probe drops from ~150–300s to ~15–35s; batch of 5 questions drops from ~29 min to ~2–3 min; `Check` in practice responds in < 3s even in scenarios with `Pending` pods.
+- **Acceptance Criteria:** Live benchmark on the `cka` cluster validating `settle()` < 4s on `wl-resources-too-high` and `wl-taint-toleration`; HTTP check execution via Warm Probe < 500ms; unit tests of the 3 new check types and new operators.
 
 ---
 
-### Frente 6 (P2) — Infraestrutura, Concorrência, LLM Ops & Higiene de Código
-**Objetivo:** Garantir estabilidade operacional sob múltiplos usos, compatibilidade cross-provider (Multipass e `kind`), suporte a modelos locais e código limpo.
+### Front 4 (P1) — Question Bank Management, Quarantine & Real Telemetry
+**Goal:** Turn `bank_questions` into a curated, traceable collection free of repetitions and historical junk.
 
-- **Mudanças Técnicas:**
-  1. **Governança de Cluster (`ClusterLease`) & Engine Único (`app/main.py`):**
-     - Compartilhar **uma única instância** de `ScenarioEngine` entre `SessionService`, `GenerationPipeline` e `Teardown`.
-     - Introduzir um coordenador `ClusterLease` impedindo conflitos destrutivos: `reset-baseline` e `power stop/restart` retornam `409 Conflict` se houver geração rodando; geração com `node_commands` ou `destructive=True` é bloqueada enquanto houver sessão prática ativa (enquanto geração puramente namespace-scoped pode usar `cka-prove-*` isolado ou avisar).
-  2. **Performance de SSH e `MultipassProvider` (`app/provider/multipass.py`, `app/ssh_runner.py`):**
-     - Adicionar cache com TTL curto (ex.: 20s) no resultado de `MultipassProvider.nodes()`, invalidado imediatamente em caso de erro SSH ou ação de `ClusterPowerManager`.
-     - Habilitar OpenSSH `ControlMaster=auto`, `ControlPath=~/.cka-arena/ssh-mux-%r@%h:%p`, `ControlPersist=120s` em `_ssh_base()` (`app/ssh_runner.py:104-113`), reduzindo latência de comandos repetidos nos nós de ~130ms para ~15ms.
-  3. **Teardown agnóstico ao Provider & Baseline de Taints (`app/teardown.py`):**
-     - Migrar `cleanup_session()`, `reset_clean()` e `drift()` de `ssh_runner.sudo_run(ip, ...)` para `provider.get().exec(name, ..., sudo=True)`, tornando o L1/L2/drift 100% funcionais também no provider `kind` (WSL2).
-     - Capturar a lista baseline de taints e labels dos nós no `ClusterDoctor`, removendo em `reset_clean()` quaisquer taints/labels divergentes adicionados durante cenários (não apenas `cka-arena/practice=critical:NoSchedule-`).
-  4. **LLM Client v2 & Observabilidade (`app/llm_client.py`, `app/db.py`, `static/js/settings.js`):**
-     - Persistir `thinking` e `reasoning_effort` em `save_config()` e expor seletor na UI em **Settings → AI provider**.
-     - Adicionar preset **`ollama`** (`http://127.0.0.1:11434/v1`, protocolo `openai`, sem obrigatoriedade de API key real — aceitando placeholder `"ollama"`) e permitir digitação de `model` customizado na UI além dos presets do dropdown.
-     - Reaproveitar um único `httpx.AsyncClient` persistente por instância (fechado no shutdown do `lifespan`).
-     - Estender `llm_generations` com colunas `job_id`, `duration_ms`, `prompt_tokens`, `completion_tokens`, `reasoning_tokens` e expor no Studio métricas de saúde da geração (taxa de publicação 7d, tempo médio por questão e top motivos de falha).
-  5. **Higiene de repositório e suíte de testes:**
-     - Remover `data/arena.db` (0 bytes, órfão) e verificar/mover YAMLs soltos na raiz (`deploy.yaml`, `role.yaml`, `rolebinding.yaml`) para `scenarios/examples/` ou remover se forem testes manuais antigos.
-     - Resolver as tabelas mortas `terminal_sessions` e `command_audit` (0 linhas): implementar auditoria opt-in (G9) ou removê-las do schema até priorizá-las.
-     - Corrigir o teste defeituoso `tests/test_composer.py:89` (`if False`) e adicionar testes de regressão cobrindo todos os novos gates, `Smart Settle`, `len_gte`, `INVALID` vs `ERROR`, histórico `assistant`, digest pré-cleanup e `ClusterLease`.
+- **Technical Changes:**
+  1. **Instrument real telemetry (`app/bank.py`, `app/sessions.py`):**
+     - Include `weight_pct` in the `SELECT` of `bank.draw_exam_sample()` (`app/bank.py:137-139`) so `sessions.create()` records a real `total_weight` (not `0`).
+     - On activating a `session_item` (`_activate`), increment `times_used = times_used + 1` and update `last_used_at` in `bank_questions`.
+     - On passing the check (`sessions.check()`), update `avg_solve_seconds` (moving average or recomputed via `session_items`) and increment `first_try_pass_count` when `attempts == 1`.
+     - Improve semantic dedup (`app/bank.py:envelope_hash`): beyond the exact hash, add an `archetype_id` column and dedup by `(archetype_id, title_normalized)` or structural similarity to avoid multiple clones with lightly paraphrased titles.
+  2. **Curation & Quarantine Endpoints (`app/main.py`, `app/bank.py`):**
+     - `GET /api/bank/questions`: filters by `state` (`published|draft|retired`), `domain`, `difficulty`, `source`, text search, pagination and metrics (`times_used`, `avg_solve_seconds`).
+     - `GET /api/bank/questions/{id}`: returns the complete `ScenarioEnvelope`, `probe_result_json` and `generator_meta_json`.
+     - `POST /api/bank/questions/{id}/reprobe`: runs Gates + Solvability Probe on a `draft` or `published`; if it passes, promotes it to `published`.
+     - `POST /api/bank/questions/{id}/repair`: runs the surgical repair on a `draft` and publishes it if the probe passes.
+     - `POST /api/bank/questions/{id}/retire`: marks the question as `retired` with `retired_reason` (used by the "Report issue" button during study).
+     - `DELETE /api/bank/questions/{id}`: removes a discarded `draft` (protected against deleting questions already referenced by `session_items`).
+  3. **Curation UI in Studio & "Report Issue" in the Workspace (`static/js/studio.js`, `static/js/workspace.js`):**
+     - Add to the Studio a **Bank & Quarantine** tab/section listing question totals per state, allowing opening any `draft` to see the exact probe error and clicking `Re-probe`, `AI Repair`, `Retire` or `Delete`.
+     - Add to the Exam Workspace a discreet **Report / Retire** button next to `Skip`: if a question seems ambiguous or broken at runtime, the user retires it on the spot with a reason and unlocks the sequence.
+  4. **Sanitizing the current bank (`python -m app.bank prune` or CLI script):**
+     Provide an idempotent command to archive/clean the 71 old drafts, retire the duplicated clones (`Allow Selected Traffic Through Default Deny` ×4) and retire the Composer v5 Frankenstein scenarios — keeping the 17 validated seeds and the healthy LLM questions.
 
-- **Impacto Esperado:** Zero race conditions no cluster, SSH ~8× mais rápido, paridade total Multipass/kind no teardown, suporte a Ollama offline e visibilidade de custos/latência da LLM.
-- **Critérios de Aceite:** Suíte `pytest` expandida 100% verde; latência SSH medida em `doctor.health()` < 25ms após aquecimento de socket; L1/L2 testado contra mock de `KindProvider`.
+- **Expected Impact:** End of blind question repetition in sessions, full visibility of why something went to quarantine, and a complete heal/retire cycle without hand-editing SQLite.
+- **Acceptance Criteria:** Sessions recording `total_weight > 0` and updating `times_used`/`first_try_pass_count`/`avg_solve_seconds`; complete UI flow to inspect a `draft`, repair/re-probe and promote or delete.
 
 ---
 
-## 5. Roadmap de Execução em 4 Ondas
+### Front 5 (P1/P2) — Practice Experience, Assets in Scratch & `mock_exam` Mode
+**Goal:** Complete fidelity to the real CKA exam (PSI/Killer.sh) and fix practical workspace and terminal frictions.
 
-| Onda | Frentes | Duração Est. | Entregáveis Principais | Critério de Aceite Mensurável |
+- **Technical Changes:**
+  1. **Full `mock_exam` mode (`app/sessions.py`, `static/js/studio.js`, `static/js/workspace.js`, `static/js/app.js`):**
+     - In the **Practice** modal, allow choosing between **Study Mode** (immediate Check feedback → Next locked, current behavior) and **Mock Exam (120 min)** (a realistic PSI/Killer.sh-style exam simulation).
+     - In `mock_exam`:
+       - Global 120-minute countdown timer visible in the header.
+       - Free navigation between questions in the queue (`Q1..Q15`), a **Flag for Review (`🚩`)** button and per-question state persistence (questions are applied/cleaned on demand or kept isolated per namespace).
+       - Release of questions with `destructive: true` (with an explicit warning before activation and automatic L2 provisioning at the end).
+       - Final report with the official weighted score (`earned_weight / total_weight`), the CKA cut line (`66%` PASS/FAIL) and per-domain breakdown.
+  2. **Asset availability in the terminal scratch (`app/config.py`, `app/terminal.py`, `scenarios/seed/ca-helm-upgrade.json`):**
+     - At app startup/setup, sync `scenarios/seed/assets/` to `~/.cka-arena/assets/` (Helm charts, Kustomize overlays).
+     - In `TerminalSession.spawn()` (`app/terminal.py:120-124`), create a symlink `assets -> ~/.cka-arena/assets` inside each scratch dir `~/.cka-arena/scratch/<tab_id>/` and export `CKA_ASSETS=~/.cka-arena/assets`.
+     - Update `ca-helm-upgrade.json` and the Builder prompt to reference `./assets/...` (working both at the repo root in the Probe and inside any browser terminal tab).
+  3. **UX polish in Workspace and Studio (`static/index.html`, `static/js/`):**
+     - Expose `ssh_target` and `destructive` in `SessionService.get()`. Render the SSH pill in the Workspace only when `ssh_target` is not null (or point dynamically to `ssh cka-<ssh_target>` instead of the fixed `ssh cka-node01` at `workspace.js:98`).
+     - Include the results of the active question's last `check_run` in the `GET /api/sessions/{id}` payload, so an F5 in the browser does not wipe the diagnostics drawer.
+     - Add a **Cancel** button (`POST /api/generate/cancel`) on the Studio Live Job Card using `asyncio.Task.cancel()` with clean cleanup of the active probe.
+     - At startup (`lifespan` of `app/main.py`), mark any `generation_requests` left in `status='running'` by abruptly terminated processes as `status='aborted'`.
+     - Add a **Check ⌘↵** button on the terminal footer bar (`static/index.html:80-94`), aligning the implemented UI with what `README.md`/`PLAN.md` specify.
+
+- **Expected Impact:** Exam experience identical to the official test, zero relative-path failures in Helm/Kustomize questions and full job control in the UI.
+- **Acceptance Criteria:** A complete `mock_exam` session computing the weighted score (`earned_weight/total_weight`); the `helm upgrade` of `ca-helm-upgrade.json` executable copying straight from the terminal scratch without `cd`; job cancellation cleaning up the ephemeral probe namespace.
+
+---
+
+### Front 6 (P2) — Infrastructure, Concurrency, LLM Ops & Code Hygiene
+**Goal:** Guarantee operational stability under multiple uses, cross-provider compatibility (Multipass and `kind`), local model support and clean code.
+
+- **Technical Changes:**
+  1. **Cluster governance (`ClusterLease`) & single Engine (`app/main.py`):**
+     - Share a **single instance** of `ScenarioEngine` across `SessionService`, `GenerationPipeline` and `Teardown`.
+     - Introduce a `ClusterLease` coordinator preventing destructive conflicts: `reset-baseline` and `power stop/restart` return `409 Conflict` if a generation is running; generation with `node_commands` or `destructive=True` is blocked while a practice session is active (while purely namespace-scoped generation may use isolated `cka-prove-*` or warn).
+  2. **SSH performance and `MultipassProvider` (`app/provider/multipass.py`, `app/ssh_runner.py`):**
+     - Add a short-TTL cache (e.g. 20s) to the `MultipassProvider.nodes()` result, invalidated immediately on SSH errors or `ClusterPowerManager` actions.
+     - Enable OpenSSH `ControlMaster=auto`, `ControlPath=~/.cka-arena/ssh-mux-%r@%h:%p`, `ControlPersist=120s` in `_ssh_base()` (`app/ssh_runner.py:104-113`), cutting the latency of repeated node commands from ~130ms to ~15ms.
+  3. **Provider-agnostic Teardown & taint baseline (`app/teardown.py`):**
+     - Migrate `cleanup_session()`, `reset_clean()` and `drift()` from `ssh_runner.sudo_run(ip, ...)` to `provider.get().exec(name, ..., sudo=True)`, making L1/L2/drift 100% functional on the `kind` provider too (WSL2).
+     - Capture the baseline list of node taints and labels in `ClusterDoctor`, and in `reset_clean()` remove any divergent taints/labels added during scenarios (not just `cka-arena/practice=critical:NoSchedule-`).
+  4. **LLM Client v2 & observability (`app/llm_client.py`, `app/db.py`, `static/js/settings.js`):**
+     - Persist `thinking` and `reasoning_effort` in `save_config()` and expose a selector in the UI under **Settings → AI provider**.
+     - Add an **`ollama`** preset (`http://127.0.0.1:11434/v1`, `openai` protocol, no real API key required — accepting the placeholder `"ollama"`) and allow typing a custom `model` in the UI beyond the dropdown presets.
+     - Reuse a single persistent `httpx.AsyncClient` per instance (closed on `lifespan` shutdown).
+     - Extend `llm_generations` with columns `job_id`, `duration_ms`, `prompt_tokens`, `completion_tokens`, `reasoning_tokens` and surface generation health metrics in the Studio (7d publication rate, average time per question and top failure reasons).
+  5. **Repository hygiene and test suite:**
+     - Remove `data/arena.db` (0 bytes, orphan) and verify/move stray YAMLs in the root (`deploy.yaml`, `role.yaml`, `rolebinding.yaml`) to `scenarios/examples/` or remove them if they are old manual tests.
+     - Resolve the dead tables `terminal_sessions` and `command_audit` (0 rows): implement opt-in auditing (G9) or remove them from the schema until prioritized.
+     - Fix the broken test `tests/test_composer.py:89` (`if False`) and add regression tests covering all new gates, `Smart Settle`, `len_gte`, `INVALID` vs `ERROR`, `assistant` history, pre-cleanup digest and `ClusterLease`.
+
+- **Expected Impact:** Zero race conditions on the cluster, SSH ~8× faster, full Multipass/kind parity in teardown, offline Ollama support and LLM cost/latency visibility.
+- **Acceptance Criteria:** Expanded `pytest` suite 100% green; SSH latency measured in `doctor.health()` < 25ms after socket warm-up; L1/L2 tested against a mock `KindProvider`.
+
+---
+
+## 5. Execution Roadmap in 4 Waves
+
+| Wave | Fronts | Est. Duration | Main Deliverables | Measurable Acceptance Criterion |
 | :--- | :--- | :---: | :--- | :--- |
-| **Onda 1 — Estabilização Cirúrgica (P0)** | Frente 1 + Smart Settle + Warm Probe + `len_gte`/`INVALID` | **2–3 dias** | Histórico `assistant` nos retries; digest pré-cleanup; `len_gte` + `INVALID` + timeout probe; `BUILDER_SYSTEM` completo; reordenação D1/D2 → C → E; `--dry-run=server` em `solution.manifests`; gate JSON `-p` / campos imutáveis / anti-spoiler; `Smart Settle` + `Warm Probe` | Lote de 5 `exam_standard` conclui em **< 3 min** com **≥ 90% publicação**; `Check` com pod `Pending` responde em **< 3s**; 0 falsos `infra_error` por params inválidos |
-| **Onda 2 — Motor de Geração v2 (P0)** | Frente 2 + Isolamento Efêmero + Novos Checks | **4–5 dias** | `app/curriculum.py` (35–40 arquétipos CNCF 2025/2026); `app/planner.py` (cobertura 5×3 + namespaces neutros + `avoid_recent`); few-shot dinâmico; Causal Incident Blueprints substituindo o Frankenstein Composer; probes paralelos em `cka-prove-*`; 3 novos check types + operadores | Lote de 5 `exam_standard` + 3 `killer_hardcore` + 2 `boss_fight` cobrindo **5/5 domínios**, **≥ 90% publicação**, **0 spoilers**, **0 clones**, **0 Frankenstein desconexos**, média **< 45s/questão** |
-| **Onda 3 — Banco, Curadoria & Simulado Real (P1)** | Frente 4 + Frente 5 | **3–4 dias** | Telemetria `times_used`/`total_weight`/`avg_solve_seconds`; API + UI de Bank & Quarantine Inspector; botão `Report / Retire`; saneamento das 71 drafts e clones atuais; Modo `mock_exam` (120 min, flag, score ponderado); symlink de assets no scratch; botão `Check` no terminal e `Cancel` no Studio | Simulado de 15 questões (`mock_exam`) funcional ponta a ponta com score ponderado; `ca-helm-upgrade` resolvível direto do terminal scratch; quarentena inspecionável/reparável na UI |
-| **Onda 4 — Resiliência, SSH/Kind & LLM Ops (P2)** | Frente 6 | **2–3 dias** | `ClusterLease` + `ScenarioEngine` único; cache TTL de nós + SSH `ControlMaster`; `teardown.py` via `provider.exec`; baseline de taints/labels; `thinking`/Ollama/modelo customizado na UI; `llm_generations` com tokens e duração; limpeza de repo e testes | `pytest` expandida 100% verde; SSH em < 25ms; L1/L2 verde em `KindProvider` e `MultipassProvider`; 0 `generation_requests` zumbis pós-restart |
+| **Wave 1 — Surgical Stabilization (P0)** | Front 1 + Smart Settle + Warm Probe + `len_gte`/`INVALID` | **2–3 days** | `assistant` history across retries; pre-cleanup digest; `len_gte` + `INVALID` + probe timeout; complete `BUILDER_SYSTEM`; reordering D1/D2 → C → E; `--dry-run=server` on `solution.manifests`; JSON `-p` gate / immutable fields / anti-spoiler; `Smart Settle` + `Warm Probe` | Batch of 5 `exam_standard` completes in **< 3 min** with **≥ 90% publication**; `Check` with `Pending` pod responds in **< 3s**; 0 false `infra_error` from invalid params |
+| **Wave 2 — Generation Engine v2 (P0)** | Front 2 + Ephemeral Isolation + New Checks | **4–5 days** | `app/curriculum.py` (35–40 CNCF 2025/2026 archetypes); `app/planner.py` (5×3 coverage + neutral namespaces + `avoid_recent`); dynamic few-shot; Causal Incident Blueprints replacing the Frankenstein Composer; parallel probes in `cka-prove-*`; 3 new check types + operators | Batch of 5 `exam_standard` + 3 `killer_hardcore` + 2 `boss_fight` covering **5/5 domains**, **≥ 90% publication**, **0 spoilers**, **0 clones**, **0 disconnected Frankensteins**, average **< 45s/question** |
+| **Wave 3 — Bank, Curation & Real Mock Exam (P1)** | Front 4 + Front 5 | **3–4 days** | `times_used`/`total_weight`/`avg_solve_seconds` telemetry; Bank & Quarantine Inspector API + UI; `Report / Retire` button; sanitization of the 71 current drafts and clones; `mock_exam` mode (120 min, flag, weighted score); assets symlink in the scratch; `Check` button in the terminal and `Cancel` in the Studio | A 15-question `mock_exam` end-to-end functional with weighted score; `ca-helm-upgrade` solvable straight from the terminal scratch; quarantine inspectable/repairable in the UI |
+| **Wave 4 — Resilience, SSH/Kind & LLM Ops (P2)** | Front 6 | **2–3 days** | `ClusterLease` + single `ScenarioEngine`; node TTL cache + SSH `ControlMaster`; `teardown.py` via `provider.exec`; taint/label baseline; `thinking`/Ollama/custom model in the UI; `llm_generations` with tokens and duration; repo cleanup and tests | Expanded `pytest` 100% green; SSH in < 25ms; L1/L2 green on `KindProvider` and `MultipassProvider`; 0 zombie `generation_requests` after restart |
 
 ---
 
-## 6. Riscos, Trade-offs e Decisões Arquiteturais
+## 6. Risks, Trade-offs and Architectural Decisions
 
-1. **Orquestração própria vs. LangGraph/LangChain (decisão mantida):**
-   Os problemas atuais **não** se devem à falta de um framework de agentes, e sim aos bugs de fluxo (omissão do histórico `assistant`, digest pós-cleanup, ausência de Slot Planner e `settle()` cego). Manter a máquina de estados própria em `async Python` continua sendo a escolha mais rápida, enxuta e fácil de depurar. *Gatilho de revisita:* apenas se no futuro quisermos dar um shell interativo `kubectl` para um agente autor iterar autonomamente em cenários de control plane altamente exploratórios.
+1. **Own orchestration vs. LangGraph/LangChain (decision upheld):**
+   The current problems are **not** caused by the absence of an agent framework, but by flow bugs (missing `assistant` history, post-cleanup digest, absence of a Slot Planner and blind `settle()`). Keeping the own state machine in `async Python` remains the fastest, leanest and easiest-to-debug choice. *Revisit trigger:* only if in the future we want to give an interactive `kubectl` shell to an authoring agent iterating autonomously on highly exploratory control-plane scenarios.
 2. **Trade-off: Warm Probe Pod × `NetworkPolicy`:**
-   Um pod compartilhado no namespace `cka-arena-system` pode receber tráfego ou ser bloqueado de forma diferente de um pod no namespace do cenário quando há `NetworkPolicy` filtrando por `podSelector` ou `namespaceSelector`. **Regra de segurança obrigatória:** o validador só usa o Warm Probe Pod quando o cenário **não** declara nem aplica `NetworkPolicy` no namespace alvo (ou quando o check explicitamente define `probe_scope: "external"`). Cenários com `NetworkPolicy` continuam usando pod dentro do namespace (`label_selector` do `client`/`intruder` ou pod efêmero no próprio namespace).
-3. **Trade-off: Probes paralelos × Estado compartilhado do cluster:**
-   Rodar probes em paralelo acelera muito lotes grandes, mas cenários com `node_commands`, `PersistentVolume` cluster-scoped, `taints`, `ClusterRole`/`ClusterRoleBinding`, `GatewayClass` ou `destructive: true` alteram estado global do cluster. **Regra de isolamento:** apenas cenários puramente namespace-scoped rodam sob semáforo concorrente (máx. 2 simultâneos, com reescrita temporária de namespaces para `cka-prove-<slot>-<hex>`); todos os demais adquirem automaticamente o lock exclusivo do cluster.
-4. **Trade-off: Custo/Latência × Modelo por Tier e Estágio:**
-   Com `deepseek-flash` (fast), chamadas de geração duram ~5s vs. 45–90s com reasoning ativo. **Política recomendada:**
-   - Normalizador (A), Revisor (C), 1º pass de `exam_standard` (B) e 1º repair (R1): modelo **fast (`thinking off` / effort `low`)**.
-   - 1º pass de `killer_hardcore` / `boss_fight` (B): modelo **principal (`model`)** em modo rápido ou effort baixo, usando o exemplar few-shot e blueprint causal.
-   - 2º repair (R2) e retries após falha complexa de probe em tiers duras: acionar **`deep=True`** seletivamente.
-   - Suporte a **Ollama** local como opção offline gratuita na UI, ciente de que modelos 7B–14B locais terão menor taxa de aprovação de 1ª tentativa em `killer_hardcore`/`boss_fight` do que modelos frontier via API.
-
+   A shared pod in the `cka-arena-system` namespace may receive traffic or be blocked differently from a pod in the scenario's namespace when there is a `NetworkPolicy` filtering by `podSelector` or `namespaceSelector`. **Mandatory safety rule:** the validator uses the Warm Probe Pod only when the scenario neither declares nor applies a `NetworkPolicy` in the target namespace (or when the check explicitly sets `probe_scope: "external"`). Scenarios with `NetworkPolicy` keep using a pod inside the namespace (`label_selector` of `client`/`intruder` or an ephemeral pod in the namespace itself).
+3. **Trade-off: parallel probes × shared cluster state:**
+   Running probes in parallel greatly speeds up large batches, but scenarios with `node_commands`, cluster-scoped `PersistentVolume`, `taints`, `ClusterRole`/`ClusterRoleBinding`, `GatewayClass` or `destructive: true` change global cluster state. **Isolation rule:** only purely namespace-scoped scenarios run under the concurrent semaphore (max 2 at a time, with temporary namespace rewrite to `cka-prove-<slot>-<hex>`); all others automatically acquire the exclusive cluster lock.
+4. **Trade-off: cost/latency × model per tier and stage:**
+   With `deepseek-flash` (fast), generation calls take ~5s vs. 45–90s with reasoning on. **Recommended policy:**
+   - Normalizer (A), Reviewer (C), 1st pass of `exam_standard` (B) and 1st repair (R1): **fast model (`thinking off` / effort `low`)**.
+   - 1st pass of `killer_hardcore` / `boss_fight` (B): **main model (`model`)** in fast mode or low effort, using the few-shot exemplar and the causal blueprint.
+   - 2nd repair (R2) and retries after a complex probe failure on hard tiers: trigger **`deep=True`** selectively.
+   - Local **Ollama** support as a free offline option in the UI, mindful that local 7B–14B models will have a lower 1st-attempt approval rate in `killer_hardcore`/`boss_fight` than frontier models via API.
 
 ---
 
-## 7. Status & Evidências Pós-Implementação
+## 7. Status & Evidence After Implementation
 
-Todas as 4 ondas (6 frentes) foram implementadas e verificadas contra a suíte automatizada, banco SQLite, provedor LLM (`deepseek` / `deepseek-flash`) e cluster Multipass Kubernetes ao vivo (`controlplane`, `node01`, `node02`).
+All 4 waves (6 fronts) were implemented and verified against the automated suite, the SQLite bank, the LLM provider (`deepseek` / `deepseek-flash`) and the live Multipass Kubernetes cluster (`controlplane`, `node01`, `node02`).
 
-### Comparativo Antes vs. Depois (Observado)
+### Before vs. After Comparison (Observed)
 
-| Métrica | Antes | Depois (Medido) | Evidência / Comando |
+| Metric | Before | After (Measured) | Evidence / Command |
 | :--- | :--- | :--- | :--- |
-| **Suíte de Testes** | `106 passed` (com `test_composer.py` neutralizado por `if False`) | **`124 passed, 0 failed, 0 skipped`** em `45.58s` + **`node --check` OK** nos 8 arquivos `static/js/*.js` | `.venv/bin/pytest -q` (`test_planner.py`, `test_smart_settle_and_api.py`, `test_composer.py`) |
-| **Validação das Seeds (Cluster Real)** | `settle()` cego + `ca-helm-upgrade` acoplado ao path do host + 2 seeds com spoilers no sintoma | **`17/17 PROBE OK`** em **`2m 00.65s`** (`cka-probe-runner` 1/1 Running em `node02`) | `.venv/bin/python -m app.seed validate` (pós-correção anti-spoiler em `ts-crashloop-fix.json` e `ts-image-pull.json`) |
-| **Quarentena / Publicação LLM** | **60,2%** de quarentena histórica (`71` drafts vs `47` publicadas) | **`7/7` publicadas (`100%`), `0` quarentenas (`0%`)** no benchmark ao vivo | Pipeline v2 nos 3 tiers (`exam_standard` 3/3, `killer_hardcore` 2/2, `boss_fight` 2/2) |
-| **Velocidade de Geração (`exam_standard`)** | `~29 min` (`1.734,6s`) para 5 questões | **`34,3s` para 3 questões** (`~11,4s`/questão) com probes em paralelo em namespaces efêmeros | Benchmark `GenerationPipeline` (`q-580070cb3005`, `q-637e1e6d8a5e`, `q-68967483835d`) |
-| **Qualidade & Diversidade (`killer` / `boss`)** | 67% fallbacks `"Repair N cluster faults..."` · 12/14 em S&N · múltiplos Frankenstein `:` | **`killer_hardcore` 2/2 em `314,3s`** + **`boss_fight` 2/2 em `354,1s`** com incidentes causais coesos em stack única, namespaces neutros (`billing`, `reviews`, `reporting`, `ingest`, `notifications`, `gateway-edge`), `0` spoilers e `docs_links` reais | Inspeção direta de `q-9d61d6afe97d`, `q-f7cb242f5261`, `q-be9cf367b3ec`, `q-4ee23d479628` |
-| **Saneamento do Banco SQLite** | `64` publicadas · `71` drafts · jobs `running` órfãos | **`5` jobs interrompidos recuperados**; `prune --apply` removeu **`71` drafts** e arquivou **`9` Composer `:` + `4` duplicadas** → banco final: **`58` publicadas, `0` drafts, `13` retired** | `.venv/bin/python -m app.bank prune --apply` + pós-benchmark |
-| **Infra SSH, Terminal & Drift** | SSH sem multiplexação · terminal scratch quebrava `./assets` · `teardown.py` acoplado a SSH | `doctor.health()`: **`0,68s` / `0,64s`** (`ssh_ms`: **`12,4–13,4ms`** via `ControlMaster`) · symlink `./assets` + `CKA_ASSETS` ok no scratch · `Teardown.drift()` == **`False`** (`0` diffs nos 3 nós) | Checagem direta em `app/terminal.py`, `app/doctor.py`, `app/teardown.py` e `KindProvider` mock |
+| **Test Suite** | `106 passed` (with `test_composer.py` neutralized by `if False`) | **`124 passed, 0 failed, 0 skipped`** in `45.58s` + **`node --check` OK** on the 8 `static/js/*.js` files | `.venv/bin/pytest -q` (`test_planner.py`, `test_smart_settle_and_api.py`, `test_composer.py`) |
+| **Seed Validation (Real Cluster)** | blind `settle()` + `ca-helm-upgrade` coupled to the host path + 2 seeds with symptom spoilers | **`17/17 PROBE OK`** in **`2m 00.65s`** (`cka-probe-runner` 1/1 Running on `node02`) | `.venv/bin/python -m app.seed validate` (after the anti-spoiler fix in `ts-crashloop-fix.json` and `ts-image-pull.json`) |
+| **LLM Quarantine / Publication** | **60.2%** historical quarantine (`71` drafts vs `47` published) | **`7/7` published (`100%`), `0` quarantined (`0%`)** in the live benchmark | Pipeline v2 on all 3 tiers (`exam_standard` 3/3, `killer_hardcore` 2/2, `boss_fight` 2/2) |
+| **Generation Speed (`exam_standard`)** | `~29 min` (`1,734.6s`) for 5 questions | **`34.3s` for 3 questions** (`~11.4s`/question) with probes in parallel in ephemeral namespaces | `GenerationPipeline` benchmark (`q-580070cb3005`, `q-637e1e6d8a5e`, `q-68967483835d`) |
+| **Quality & Diversity (`killer` / `boss`)** | 67% `"Repair N cluster faults..."` fallbacks · 12/14 in S&N · multiple `:` Frankensteins | **`killer_hardcore` 2/2 in `314.3s`** + **`boss_fight` 2/2 in `354.1s`** with cohesive causal incidents in a single stack, neutral namespaces (`billing`, `reviews`, `reporting`, `ingest`, `notifications`, `gateway-edge`), `0` spoilers and real `docs_links` | Direct inspection of `q-9d61d6afe97d`, `q-f7cb242f5261`, `q-be9cf367b3ec`, `q-4ee23d479628` |
+| **SQLite Bank Sanitization** | `64` published · `71` drafts · orphan `running` jobs | **`5` interrupted jobs recovered**; `prune --apply` removed **`71` drafts** and archived **`9` Composer `:` + `4` duplicates** → final bank: **`58` published, `0` drafts, `13` retired** | `.venv/bin/python -m app.bank prune --apply` + post-benchmark |
+| **SSH, Terminal & Drift Infra** | SSH without multiplexing · terminal scratch broke `./assets` · `teardown.py` coupled to SSH | `doctor.health()`: **`0.68s` / `0.64s`** (`ssh_ms`: **`12.4–13.4ms`** via `ControlMaster`) · symlink `./assets` + `CKA_ASSETS` ok in the scratch · `Teardown.drift()` == **`False`** (`0` diffs across the 3 nodes) | Direct check in `app/terminal.py`, `app/doctor.py`, `app/teardown.py` and mock `KindProvider` |

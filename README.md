@@ -127,129 +127,130 @@ no official exam content.*
 
 ---
 
-## Visão geral
 
-Plataforma web local para treinar para a prova **Certified Kubernetes Administrator (CKA)**
-contra um cluster de laboratório real — `kubeadm` em VMs Multipass (macOS/Linux) ou em
-containers kind (WSL2/Linux com Docker). A validação é **determinística, por estado
-resultante** (como nos simuladores de prova): o **Check** inspeciona o cluster e os nós, não
-os comandos digitados. Somam-se a isso um **gerador de cenários via LLM**, um **terminal real
-no navegador** e a **gestão do ciclo de vida do laboratório** (ligar, desligar, reset limpo).
+## Overview
 
-A UI, os enunciados e o feedback são **100% em inglês** — o idioma da prova. A documentação
-interna do projeto é em pt-BR.
+Local web platform to prepare for the **Certified Kubernetes Administrator (CKA)**
+exam against a real lab cluster — `kubeadm` on Multipass VMs (macOS/Linux) or kind
+containers (WSL2/Linux with Docker). Validation is **deterministic, based on resulting
+state** (like exam simulators): the **Check** inspects the cluster and the nodes, not
+the commands typed. On top of that: an **LLM-powered scenario generator**, a **real
+terminal in the browser**, and **lab lifecycle management** (start, stop, clean reset).
 
-## Como funciona
+The UI, question prompts and feedback are **100% in English** — the exam's language.
+
+## How it works
 
 ```mermaid
 flowchart LR
-    UI["Browser — 127.0.0.1:8765\nquestão · terminal · Studio · Readiness"] <-->|HTTP · SSE · WebSocket| API["FastAPI\nvalidação determinística"]
-    API <--> DB[("SQLite local\nbanco · sessões · progresso")]
-    API -->|"cenários (opcional)"| LLM["Provider LLM"]
-    API <-->|"kubeconfig dedicado · SSH ou docker exec"| LAB["Laboratório\ncontrolplane · node01 · node02"]
+    UI["Browser — 127.0.0.1:8765\nquestion · terminal · Studio · Readiness"] <-->|HTTP · SSE · WebSocket| API["FastAPI\ndeterministic validation"]
+    API <--> DB[("SQLite local\nquestion bank · sessions · progress")]
+    API -->|"scenarios (optional)"| LLM["LLM Provider"]
+    API <-->|"dedicated kubeconfig · SSH or docker exec"| LAB["Lab\ncontrolplane · node01 · node02"]
 ```
 
-1. O backend aplica o **setup** da questão no laboratório (manifestos, comandos em nós via
-   backup + quebra controlada).
-2. Você resolve no terminal do navegador (ou num terminal nativo) e clica em **Check**.
-3. Cada critério retorna `PASS`/`FAIL` com evidência; **Next** só libera com 100%.
-4. Ao avançar, o cleanup da questão (L0) restaura backups e remove o que ela criou; ao
-   encerrar, a limpeza da sessão (L1) ou o reset limpo (L2) devolvem o laboratório ao
-   baseline, preservando os addons.
+1. The backend applies the question's **setup** to the lab (manifests, commands on nodes via
+   backup + controlled breakage).
+2. You solve it in the browser terminal (or a native terminal) and click **Check**.
+3. Each criterion returns `PASS`/`FAIL` with evidence; **Next** only unlocks at 100%.
+4. On advancing, the question cleanup (L0) restores backups and removes what it created; on
+   finishing, session cleanup (L1) or a clean reset (L2) returns the lab to baseline,
+   preserving the addons.
 
-Detalhes em [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+Details in [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
-## Fluxo de trabalho
+## Workflow
 
-Atalhos usam `⌘` no macOS e `Ctrl` no Linux/WSL2 (com o terminal focado: `Ctrl+Shift`).
+Shortcuts use `⌘` on macOS and `Ctrl` on Linux/WSL2 (with the terminal focused: `Ctrl+Shift`).
 
-1. **Arena (`⌘1`)** — enunciado no formato da prova, domínio e peso, cronômetro, Copy-Pills,
-   checklist, notepad e links da documentação permitida. **Check** avalia o estado do cluster;
-   **Next** libera só com todos os critérios. Simulados dão crédito parcial por critério.
-2. **Terminal no navegador** — shell local com perfil de exame (`k` = `kubectl`,
-   `$do` = `--dry-run=client -o yaml`, `$now` = `--force --grace-period=0`), workdir isolada
-   por aba, abas `controlplane` / `node01` / `node02`, busca no scrollback (`⌘F`), modo Zen
-   (`⌘B`) e modo Native (`` ⌘\ `` esconde o terminal embutido).
-3. **Laboratório no botão** — estado no menu de cluster do rail (Ready / Off / Starting /
-   Degraded), boot instrumentado e reset limpo (L2).
-4. **Readiness (`⌘2`)** — seis variantes de sessão (Study, Weakness Drill, Speed Blitz,
-   Mistake Replay, Guided Mock, Blind Mock), repetição espaçada por arquétipo, Skill Tree e
-   relatório Go/No-Go.
-5. **Scenario Studio (`⌘3`)** — selecione domínios e dificuldade; o pipeline planeja os slots
-   por arquétipo do currículo, gera com LLM, aplica gates determinísticos e prova a solução no
-   cluster antes de publicar. Inclui inspeção do banco, reparo, feedback e aposentadoria de
-   questões.
-6. **Study Codex (`⌘5`)** — teoria, playbooks, cheatsheets e quizzes por tópico, com XP,
-   ranks e streak; plano de estudo diário.
-7. **Cluster & Settings (`⌘4`)** — provider de IA (presets, modelos, teste de conexão, chave
-   mascarada), saúde e acesso ao laboratório, preferências.
+1. **Arena (`⌘1`)** — exam-format question prompt, domain and weight, timer, Copy-Pills,
+   checklist, notepad and links to the allowed documentation. **Check** evaluates the cluster
+   state; **Next** unlocks only when every criterion passes. Mock exams award partial credit
+   per criterion.
+2. **Terminal in the browser** — local shell with an exam profile (`k` = `kubectl`,
+   `$do` = `--dry-run=client -o yaml`, `$now` = `--force --grace-period=0`), isolated workdir
+   per tab, tabs `controlplane` / `node01` / `node02`, scrollback search (`⌘F`), Zen mode
+   (`⌘B`) and Native mode (`` ⌘\ `` hides the embedded terminal).
+3. **Lab at the click of a button** — state in the rail's cluster menu (Ready / Off / Starting /
+   Degraded), instrumented boot and clean reset (L2).
+4. **Readiness (`⌘2`)** — six session variants (Study, Weakness Drill, Speed Blitz,
+   Mistake Replay, Guided Mock, Blind Mock), spaced repetition by archetype, Skill Tree and a
+   Go/No-Go report.
+5. **Scenario Studio (`⌘3`)** — pick domains and difficulty; the pipeline plans slots per
+   curriculum archetype, generates with the LLM, applies deterministic gates and proves the
+   solution on the cluster before publishing. Includes question-bank inspection, repair,
+   feedback and question retirement.
+6. **Study Codex (`⌘5`)** — theory, playbooks, cheatsheets and quizzes per topic, with XP,
+   ranks and streaks; daily study plan.
+7. **Cluster & Settings (`⌘4`)** — AI provider (presets, models, connection test, masked key),
+   lab health and access, preferences.
 
-## Configuração (variáveis de ambiente)
+## Configuration (environment variables)
 
-| Variável | Default | Efeito |
+| Variable | Default | Effect |
 | :--- | :--- | :--- |
-| `CKA_PORT` | `8765` | Porta do servidor (sempre em `127.0.0.1`). |
-| `CKA_PROVIDER` | automático por S.O. | `multipass` ou `kind`; também pode ficar gravado em `~/.cka-arena/provider`. |
-| `CKA_AUTO_START` | `1` | `0` desliga o boot automático do laboratório ao abrir a app. |
-| `CKA_LAB_PASSWORD` | `ubuntu` | Senha do usuário `ubuntu` nas VMs do laboratório. |
-| `CKA_BRIDGE_PREFIX` | detectado | Prefixo da subnet bridged (provider Multipass). |
-| `CKA_LLM_CONFIG` | `./llm_config.json` | Caminho do arquivo de configuração do provider LLM. |
-| `CKA_LLM_PROVIDER`, `CKA_LLM_API_KEY`, `CKA_LLM_BASE_URL`, `CKA_LLM_MODEL`, `CKA_LLM_MODEL_FLASH`, `CKA_LLM_THINKING`, `CKA_LLM_REASONING_EFFORT` | — | Alternativa por ambiente ao arquivo de configuração do LLM. |
-| `CKA_ARENA_TOKEN` | indefinido | Exige `Authorization: Bearer` nas rotas `/api/*` (exceto `/api/events`). Não cobre o WebSocket do terminal, e a UI embutida não o envia. |
-| `CKA_ARENA_ALLOW_REMOTE` | desligado | Relaxa a checagem de `Origin` do WebSocket do terminal. Não use sem expor a plataforma de propósito. |
-| `NO_COLOR` | — | `setup.sh` sem cores. |
+| `CKA_PORT` | `8765` | Server port (always on `127.0.0.1`). |
+| `CKA_PROVIDER` | auto per OS | `multipass` or `kind`; can also be persisted in `~/.cka-arena/provider`. |
+| `CKA_AUTO_START` | `1` | `0` disables the automatic lab boot when the app opens. |
+| `CKA_LAB_PASSWORD` | `ubuntu` | Password of the `ubuntu` user on the lab VMs. |
+| `CKA_BRIDGE_PREFIX` | detected | Bridged subnet prefix (Multipass provider). |
+| `CKA_LLM_CONFIG` | `./llm_config.json` | Path to the LLM provider configuration file. |
+| `CKA_LLM_PROVIDER`, `CKA_LLM_API_KEY`, `CKA_LLM_BASE_URL`, `CKA_LLM_MODEL`, `CKA_LLM_MODEL_FLASH`, `CKA_LLM_THINKING`, `CKA_LLM_REASONING_EFFORT` | — | Environment-based alternative to the LLM configuration file. |
+| `CKA_ARENA_TOKEN` | unset | Requires `Authorization: Bearer` on the `/api/*` routes (except `/api/events`). Does not cover the terminal WebSocket, and the embedded UI does not send it. |
+| `CKA_ARENA_ALLOW_REMOTE` | disabled | Relaxes the `Origin` check of the terminal WebSocket. Do not use without deliberately exposing the platform. |
+| `NO_COLOR` | — | `setup.sh` without colors. |
 
-## Onde as coisas vivem
+## Where things live
 
-| Caminho | Conteúdo |
+| Path | Contents |
 | :--- | :--- |
-| `data/cka_arena.db` | Banco local: banco de questões, sessões, progresso (git-ignored). |
-| `llm_config.json` | Chave do provider LLM (git-ignored). |
-| `~/.cka-arena/kubeconfig` | Kubeconfig dedicado do laboratório (contextos `cka`, `cka-ops`, `cka-edge`). |
-| `~/.cka-arena/id_ed25519` | Chave SSH do laboratório (provider Multipass). |
-| `~/.cka-arena/nodes.json` | Mapeamento nó lógico → container (provider kind). |
-| `~/.cka-arena/assets/` | Chart Helm e overlay Kustomize usados nos cenários. |
-| `~/.cka-arena/scratch/<tab>/` | Workdir isolada de cada aba de terminal. |
-| `~/.cka-arena/setup.log` | Log do `setup.sh`. |
-| `~/.ssh/config` | Bloco gerenciado entre `# >>> CKA-ARENA MANAGED START >>>` e `# <<< CKA-ARENA MANAGED END <<<` (provider Multipass). |
+| `data/cka_arena.db` | Local database: question bank, sessions, progress (git-ignored). |
+| `llm_config.json` | LLM provider key (git-ignored). |
+| `~/.cka-arena/kubeconfig` | Dedicated lab kubeconfig (contexts `cka`, `cka-ops`, `cka-edge`). |
+| `~/.cka-arena/id_ed25519` | Lab SSH key (Multipass provider). |
+| `~/.cka-arena/nodes.json` | Logical node → container mapping (kind provider). |
+| `~/.cka-arena/assets/` | Helm chart and Kustomize overlay used in scenarios. |
+| `~/.cka-arena/scratch/<tab>/` | Isolated workdir of each terminal tab. |
+| `~/.cka-arena/setup.log` | `setup.sh` log. |
+| `~/.ssh/config` | Managed block between `# >>> CKA-ARENA MANAGED START >>>` and `# <<< CKA-ARENA MANAGED END <<<` (Multipass provider). |
 
-## Linha de comando
+## Command line
 
 ```bash
-uv run pytest -q                                   # testes (unitários e de API; sem cluster)
-uv run python -m app.seed validate [--gates-only]  # valida os seeds: com laboratório, ou só os gates
-uv run python -m app.bank audit [--apply]          # audita (e opcionalmente aposenta) questões legadas
-uv run python -m app.bank prune --apply            # limpa rascunhos e duplicatas do banco
-uv run python -m app.backup status                 # status do snapshot portável
+uv run pytest -q                                   # tests (unit and API; no cluster)
+uv run python -m app.seed validate [--gates-only]  # validates the seeds: with the lab, or gates only
+uv run python -m app.bank audit [--apply]          # audits (and optionally retires) legacy questions
+uv run python -m app.bank prune --apply            # prunes drafts and duplicates from the bank
+uv run python -m app.backup status                 # portable snapshot status
 ```
 
-## Documentação do projeto
+## Project documentation
 
-**Referência** (acompanha o código; em caso de divergência, o código prevalece):
+**Reference** (tracks the code; in case of divergence, the code prevails):
 
-| Documento | Finalidade |
+| Document | Purpose |
 | :--- | :--- |
-| [`ARCHITECTURE.md`](./ARCHITECTURE.md) | Arquitetura técnica: componentes, acesso ao laboratório, segurança e rollback, terminal, ciclo de vida do cluster, banco de dados, teardown e referência da API. |
-| [`LLM_SCENARIO_SPEC.md`](./LLM_SCENARIO_SPEC.md) | Contrato `ScenarioEnvelope` (JSON), formato de questão da prova, catálogo de checks, guardrails, regras do system prompt e rubrica de dificuldade. |
-| [`LLM_PIPELINE_SPEC.md`](./LLM_PIPELINE_SPEC.md) | Pipeline de geração, banco de questões, sorteio pelos pesos da prova, contrato do Check (`PASS`/`FAIL`/`SKIP`/`ERROR`) e teardown L0/L1/L2. |
-| [`UX_UI_SPEC.md`](./UX_UI_SPEC.md) | Especificação de UX: workspace questão + terminal, ciclo Check → Next, Studio, practice e atalhos. |
-| [`DESIGN.md`](./DESIGN.md) | Design system "Orbital Control Console": tokens, tipografia, overlays e atalhos. |
-| [`PRODUCT.md`](./PRODUCT.md) | Verdade de produto: o que é, para quem e compromissos de marca. |
+| [`ARCHITECTURE.md`](./ARCHITECTURE.md) | Technical architecture: components, lab access, security and rollback, terminal, cluster lifecycle, database, teardown and API reference. |
+| [`LLM_SCENARIO_SPEC.md`](./LLM_SCENARIO_SPEC.md) | `ScenarioEnvelope` contract (JSON), exam question format, check catalog, guardrails, system prompt rules and difficulty rubric. |
+| [`LLM_PIPELINE_SPEC.md`](./LLM_PIPELINE_SPEC.md) | Generation pipeline, question bank, exam-weight draw (largest remainder), Check contract (`PASS`/`FAIL`/`SKIP`/`ERROR`) and L0/L1/L2 teardown. |
+| [`UX_UI_SPEC.md`](./UX_UI_SPEC.md) | UX specification: question workspace + terminal, Check → Next cycle, Studio, practice and shortcuts. |
+| [`DESIGN.md`](./DESIGN.md) | "Orbital Control Console" design system: tokens, typography, overlays and shortcuts. |
+| [`PRODUCT.md`](./PRODUCT.md) | Product truth: what it is, who it is for, and brand commitments. |
 
-**Registros históricos** (congelados; descrevem o processo, não o estado atual):
+**Historical records** (frozen; describe the process, not the current state):
 
-| Documento | Finalidade |
+| Document | Purpose |
 | :--- | :--- |
-| [`PLAN.md`](./PLAN.md) | Plano mestre original: pesquisa de referências, matriz curricular e roadmap em 5 fases, com evidências de aceite. |
-| [`GAP_ANALYSIS.md`](./GAP_ANALYSIS.md) | Auditorias de gaps (G1–G21) que originaram as especificações. |
-| [`IMPLEMENTATION_READINESS.md`](./IMPLEMENTATION_READINESS.md) | Gate de prontidão antes da implementação e decisões D1–D4. |
-| [`SETUP_PLAN.md`](./SETUP_PLAN.md) | Design do `setup.sh` universal e da abstração de provider (Multipass × kind). |
-| [`IMPROVEMENT_PLAN.md`](./IMPROVEMENT_PLAN.md) | Auditoria forense do pipeline e plano de melhorias, já implementado. |
-| [`ARCHITECTURE_V3_PLAN.md`](./ARCHITECTURE_V3_PLAN.md) | Relatório do upgrade arquitetural v3 (em inglês). |
+| [`PLAN.md`](./PLAN.md) | Original master plan: reference research, curriculum matrix and 5-phase roadmap, with acceptance evidence. |
+| [`GAP_ANALYSIS.md`](./GAP_ANALYSIS.md) | Gap audits (G1–G21) that originated the specifications. |
+| [`IMPLEMENTATION_READINESS.md`](./IMPLEMENTATION_READINESS.md) | Readiness gate before implementation and decisions D1–D4. |
+| [`SETUP_PLAN.md`](./SETUP_PLAN.md) | Design of the universal `setup.sh` and the provider abstraction (Multipass × kind). |
+| [`IMPROVEMENT_PLAN.md`](./IMPROVEMENT_PLAN.md) | Forensic audit of the pipeline and improvement plan, already implemented. |
+| [`ARCHITECTURE_V3_PLAN.md`](./ARCHITECTURE_V3_PLAN.md) | Report of the v3 architecture upgrade (in English). |
 
-## Status e escopo
+## Status and scope
 
-- Ferramenta **pessoal, single-user, local-only**: sem autenticação, sem multiusuário e sem
-  suporte a exposição remota — por design, porque o terminal é um shell real do host.
-- O laboratório é **descartável**: use apenas um cluster que você pode reconstruir.
-- Acessibilidade está fora de escopo nesta fase (`prefers-reduced-motion` continua respeitado).
+- **Personal, single-user, local-only** tool: no authentication, no multi-user, no
+  remote-exposure support — by design, because the terminal is a real host shell.
+- The lab is **disposable**: use only a cluster you can rebuild.
+- Accessibility is out of scope in this phase (`prefers-reduced-motion` is still respected).

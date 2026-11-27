@@ -1,245 +1,245 @@
-# Análise de Gaps & Melhorias — CKA Arena
+# Gap Analysis & Improvements — CKA Arena
 
-> **Registro histórico (auditoria de 17/11/2026, três revisões) — congelado.** Diagnóstico que originou as especificações atuais; não é atualizado e não descreve o estado atual do código (a UI, os endpoints e o terminal mudaram depois disto). Estado atual: `README.md`, `ARCHITECTURE.md` e os specs `LLM_*`. Identificadores do ambiente privado do autor foram genéricizados.
+> **Historical record (audit of 2026-11-17, three revisions) — frozen.** The diagnosis that originated the current specifications; it is not updated and does not describe the current state of the code (the UI, endpoints, and terminal changed after this). Current state: `README.md`, `ARCHITECTURE.md`, and the `LLM_*` specs. The author's private environment identifiers were genericized.
 
-> Auditoria da documentação existente (`PLAN.md`, `ARCHITECTURE.md`, `LLM_SCENARIO_SPEC.md`, `UX_UI_SPEC.md`, `README.md`) contra o ambiente real e o novo requisito do usuário: **terminal no próprio browser** + **botão para ligar o cluster junto com a aplicação**.
+> Audit of the existing documentation (`PLAN.md`, `ARCHITECTURE.md`, `LLM_SCENARIO_SPEC.md`, `UX_UI_SPEC.md`, `README.md`) against the real environment and the user's new requirement: **terminal in the browser itself** + **button to power on the cluster together with the application**.
 >
-> Data da auditoria: 2026-11-17 · Auditor: análise automatizada com verificação viva do ambiente.
+> Audit date: 2026-11-17 · Auditor: automated analysis with live verification of the environment.
 
 ---
 
-## 0. Evidências Coletadas no Ambiente (Ground Truth)
+## 0. Evidence Collected in the Environment (Ground Truth)
 
-Verificações executadas na máquina durante esta análise:
+Checks executed on the machine during this analysis:
 
-| Verificação | Comando | Resultado |
+| Check | Command | Result |
 | :--- | :--- | :--- |
-| Estado das VMs | `multipass list` | `controlplane`, `node01`, `node02` — **Running**, com IPs na rede Bridged (subnet local) + IPs NAT do Multipass |
-| Saúde do cluster | `kubectl --context cka get nodes -o wide` | **3/3 Ready**, `v1.37.2`, `containerd://2.2.1`, kernel `5.15.0-203-generic (arm64)` |
-| Contexto kubectl | `kubectl config get-contexts` | Contexto `cka` é o **corrente**; também existem outros contextos (de trabalho) no mesmo kubeconfig |
-| SSH nos nós (rede Bridged) | `nc -z -G 2 <ip> 22` | **OK nos 3 nós** (`PasswordAuthentication yes`, user/password `ubuntu`/`ubuntu` conforme `01-setup-hosts.sh`) |
-| Ferramentas no Mac | `which` | `kubectl`, `helm`, `etcdctl`, `multipass` **presentes** |
-| Ferramentas ausentes no Mac | `which` | `tmux` **ausente**, `ttyd`/`gotty`/`wetty` **ausentes** |
-| Estado atual da plataforma | `ls ~/.cka-arena` | Ainda **não existe** (nenhum provisionamento feito) |
-| `~/.ssh/config` | `grep cka` | **0 ocorrências** — bloco gerenciado do CKA Arena ainda não foi criado |
-| Padrão de referência LLM | Cliente multi-provider próprio | Catálogo (GLM Coding Plan/Anthropic-protocol, OpenCode Go, DeepSeek, Anthropic, OpenAI-compatible) + `llm_config.json` com `provider/model/api_key/timeout_s`, configurável pela UI |
-| Provisionamento do cluster | `deploy-virtual-machines.sh` + `scripts/01-setup-hosts.sh` | `BUILD_MODE=BRIDGE`; senha `ubuntu:ubuntu` via `chpasswd`; `PRIMARY_IP` exportado em `/etc/environment` dos nós |
+| VM state | `multipass list` | `controlplane`, `node01`, `node02` — **Running**, with IPs on the Bridged network (local subnet) + Multipass NAT IPs |
+| Cluster health | `kubectl --context cka get nodes -o wide` | **3/3 Ready**, `v1.37.2`, `containerd://2.2.1`, kernel `5.15.0-203-generic (arm64)` |
+| kubectl context | `kubectl config get-contexts` | Context `cka` is the **current** one; other (work) contexts also exist in the same kubeconfig |
+| SSH to nodes (Bridged network) | `nc -z -G 2 <ip> 22` | **OK on all 3 nodes** (`PasswordAuthentication yes`, user/password `ubuntu`/`ubuntu` per `01-setup-hosts.sh`) |
+| Tools on the Mac | `which` | `kubectl`, `helm`, `etcdctl`, `multipass` **present** |
+| Tools missing on the Mac | `which` | `tmux` **missing**, `ttyd`/`gotty`/`wetty` **missing** |
+| Current platform state | `ls ~/.cka-arena` | Does **not exist yet** (no provisioning done) |
+| `~/.ssh/config` | `grep cka` | **0 occurrences** — the CKA Arena managed block has not been created yet |
+| LLM reference standard | Own multi-provider client | Catalog (GLM Coding Plan/Anthropic-protocol, OpenCode Go, DeepSeek, Anthropic, OpenAI-compatible) + `llm_config.json` with `provider/model/api_key/timeout_s`, configurable from the UI |
+| Cluster provisioning | `deploy-virtual-machines.sh` + `scripts/01-setup-hosts.sh` | `BUILD_MODE=BRIDGE`; password `ubuntu:ubuntu` via `chpasswd`; `PRIMARY_IP` exported in the nodes' `/etc/environment` |
 
-**Conclusão:** a base técnica descrita nos documentos é real e verificada. Os gaps abaixo são de **planejamento**, não de viabilidade.
-
----
-
-## 1. Pontos Fortes a Manter (O Plano Já Acerta)
-
-1. **Validação determinística por estado resultante** (nunca por comando digitado) — igual KodeKloud/Killer.sh; o contrato `ScenarioEnvelope` com 10 check types é sólido e **permanece válido sem alterações**.
-2. **Pipeline de self-healing da LLM** (schema gate → blocklist → dry-run → apply → sanity check "regra de ouro" → retry com erro exato) — padrão correto para confiabilidade de geração.
-3. **Snapshot & Rollback em 3 camadas** (baseline global + backup pré-comando + guardrails de parser) — necessário para cenários que quebram control plane.
-4. **Descoberta dinâmica de IPs via `kubectl get nodes -o json`** em vez de hardcode — decisão correta (ver G3 para o caso cluster desligado).
-5. **Matriz curricular CNCF 2025/2026 completa** com 5 domínios e pesos corretos, incluindo tópicos novos (Gateway API, sidecar nativo, Helm/Kustomize).
-6. **Sanity check anti-trivialidade** (cenário que nasce 100% PASS é regenerado) — detalhe que a maioria dos geradores ignora.
+**Conclusion:** the technical base described in the documents is real and verified. The gaps below are **planning** gaps, not feasibility ones.
 
 ---
 
-## 2. Gaps Críticos (Bloqueiam o Novo Requisito)
+## 1. Strengths to Keep (The Plan Already Gets It Right)
 
-### 🔴 G1 — Contradição central: "Zero Terminal no Browser" × novo requisito "terminal no browser"
-- **Evidência:** `PLAN.md` decisão nº 1 ("Zero Terminal no Browser... o terminal nativo do Mac executa kubectl e ssh") e `UX_UI_SPEC.md` §1 (ergonomia 40/60 com terminal nativo obrigatório).
-- **Impacto:** todo o UX (split 480px, wireframe, copy-pills pensados para janela estreita) e a arquitetura (backend não tem nenhum componente de terminal) precisam ser revistos.
-- **Correção aplicada:** decisão nº 1 reescrita para **Terminal Web integrado (padrão) + modo terminal nativo (opcional)**. Novo componente `TerminalService` especificado em `ARCHITECTURE.md` §8; layout novo em `UX_UI_SPEC.md` §2. O usuário pode continuar usando o terminal nativo se preferir — o embedded é que passa a ser o fluxo primário, o que **habilita o botão Check ao lado do terminal** (requisito: "executar os comandos dos cenarios e pedir validaçao" no mesmo lugar).
-
-### 🔴 G2 — Ausência total de gestão de ciclo de vida do cluster (ligar/desligar)
-- **Evidência:** nenhum documento menciona `multipass start/stop`. O `ClusterDoctor` assume cluster já saudável; `ARCHITECTURE.md` §4 fala de restaurar baseline via SSH, mas não de **bootar as VMs**.
-- **Impacto:** requisito central do usuário ("cluster inicializado junto com a aplicação, com botão na tela para ligar") não tem dono no design.
-- **Correção aplicada:** novo componente **ClusterPowerManager** (`ARCHITECTURE.md` §9): máquina de estados `off → starting → ready → degraded`, endpoint `POST /api/cluster/power`, sequência de boot instrumentada (VMs → SSH 22 → ssh-config regen → `/readyz` → nós Ready → doctor rápido → baseline se ausente) com progresso via SSE. UI: pill de estado no header + CTA "Ligar Cluster" quando `off` (`UX_UI_SPEC.md` §3). Flag `auto_start_on_launch` opcional nas Configurações.
-
-### 🔴 G3 — IPs Bridged são DHCP: kubeconfig e `~/.ssh/config` podem quebrar após reboot das VMs
-- **Evidência:** `deploy-virtual-machines.sh` usa `--bridged` (DHCP do roteador); `README.md`/`ARCHITECTURE.md` tratam os IPs do laboratório como fixos; o kubeconfig do contexto `cka` aponta para o IP do controlplane hardcoded.
-- **Impacto:** se o DHCP reatribuir IPs após `multipass stop/start`, **tudo** para de funcionar (kubectl, SSH, checks) sem diagnóstico óbvio. É o gap mais provável de virar incidente real.
-- **Correção aplicada:** no fim do boot, o PowerManager (a) lê IPs atuais via `multipass list --format json`, (b) **regenera o bloco gerenciado** `# >>> CKA-ARENA MANAGED >>>` do `~/.ssh/config`, e (c) faz **self-heal do kubeconfig**: se `kubectl --context cka get --raw /readyz` falhar mas SSH responder, baixa `/etc/kubernetes/admin.conf` do controlplane via SSH, reescreve `server: https://<ip-atual>:6443` e atualiza o contexto `cka` via `kubectl config set-cluster`. Detalhado em `ARCHITECTURE.md` §9.3.
-
-### 🔴 G4 — Bootstrap da chave SSH: fluxo de primeira execução não especificado (e sem `sshpass`)
-- **Evidência:** `PLAN.md` Fase 1 menciona "solicitando/usando a senha padrão do lab `ubuntu` uma única vez", mas sem mecanismo; `sshpass` **não está instalado** no Mac (verificado).
-- **Correção aplicada:** **`SSH_ASKPASS` + `SSH_ASKPASS_REQUIRE=force`** (OpenSSH ≥ 8.4) para instalar a chave pública sem interação — sem `sshpass` e sem expect. Especificado em `ARCHITECTURE.md` §3 (item 5) e validado na implementação da Fase 1.
-
-### 🔴 G5 — Nenhum componente de terminal web especificado (backend nem frontend)
-- **Evidência:** `ARCHITECTURE.md` §5 (árvore de diretórios) não tem `terminal.py` nem assets xterm; dependências do `pyproject` não listam nada de WebSocket/PTY.
-- **Impacto:** requisito central sem design.
-- **Correção aplicada:** **TerminalService** completo em `ARCHITECTURE.md` §8: PTY in-process (`pty.openpty` + `TIOCSWINSZ` + reader task por sessão, zero dependências extras — FastAPI/uvicorn já suportam WebSocket), frontend `xterm.js` **vendored em `static/vendor/`** (sem CDN, funciona offline), abas com presets (`mac`, `controlplane`, `node01`, `node02`), resize, reconnect em reload de página (PTY vive no backend), limite de sessões e timeout de idle. **Rejeitadas** as alternativas `ttyd`/`gotty` (binário externo, sem audit de telemetria, sem controle de ciclo de vida) e `tmux` (não instalado — verificado; desnecessário dado o registro de PTYs no backend).
+1. **Deterministic validation by resulting state** (never by typed command) — same as KodeKloud/Killer.sh; the `ScenarioEnvelope` contract with 10 check types is solid and **remains valid unchanged**.
+2. **LLM self-healing pipeline** (schema gate → blocklist → dry-run → apply → "golden rule" sanity check → retry with the exact error) — the right pattern for generation reliability.
+3. **Snapshot & Rollback in 3 layers** (global baseline + pre-command backup + parser guardrails) — necessary for scenarios that break the control plane.
+4. **Dynamic IP discovery via `kubectl get nodes -o json`** instead of hardcode — the right decision (see G3 for the cluster-powered-off case).
+5. **Complete CNCF 2025/2026 curriculum matrix** with 5 domains and correct weights, including new topics (Gateway API, native sidecar, Helm/Kustomize).
+6. **Anti-triviality sanity check** (a scenario born 100% PASS is regenerated) — a detail most generators ignore.
 
 ---
 
-## 3. Gaps Médios (Riscos Reais, Não Bloqueantes)
+## 2. Critical Gaps (Block the New Requirement)
 
-### 🟡 G6 — Sanity check pode gerar falso "cenário OK" por latência de image pull
-- **Evidência:** `LLM_SCENARIO_SPEC.md` estágio 4 aplica setup e roda checks imediatamente; um check `pod_status_ready` pode "falhar inicialmente" apenas porque a imagem ainda está baixando — e **passar sozinho** segundos depois, ou pior: um cenário legítimo ser rejeitado porque o check demorou a falhar por estado real.
-- **Correção proposta:** após o apply, aguardar **settle window** (pods atingirem condição estável: `Running`/`CrashLoopBackOff`/`ImagePullBackOff` ou timeout de 90s) **antes** de rodar o sanity check; documentado como melhoria do pipeline (P1) em `PLAN.md` Fase 3.
+### 🔴 G1 — Central contradiction: "Zero Terminal in the Browser" × new requirement "terminal in the browser"
+- **Evidence:** `PLAN.md` decision no. 1 ("Zero Terminal no Browser... o terminal nativo do Mac executa kubectl e ssh" [original pt-BR: Zero Terminal in the Browser... the Mac's native terminal runs kubectl and ssh]) and `UX_UI_SPEC.md` §1 (40/60 ergonomics with a mandatory native terminal).
+- **Impact:** the entire UX (480px split, wireframe, copy-pills designed for a narrow window) and the architecture (the backend has no terminal component at all) need to be revised.
+- **Fix applied:** decision no. 1 rewritten to **Integrated Web Terminal (default) + native terminal mode (optional)**. A new `TerminalService` component specified in `ARCHITECTURE.md` §8; new layout in `UX_UI_SPEC.md` §2. The user can keep using the native terminal if preferred — the embedded one becomes the primary flow, which **enables the Check button next to the terminal** (requirement: "executar os comandos dos cenarios e pedir validaçao" [original pt-BR: run the scenario commands and ask for validation] in the same place).
 
-### 🟡 G7 — `multipass` daemon fora do ar não tratado
-- **Evidência:** `deploy-virtual-machines.sh` tem watchdogs para daemon travado (comentários no script), mas o plano do CKA Arena ignora o caso.
-- **Correção proposta:** PowerManager detecta `multipass list` falhando e retorna estado `daemon_down` com instrução acionável (`sudo launchctl kickstart -k system/com.canonical.multipass`). Adicionado a `ARCHITECTURE.md` §9.
+### 🔴 G2 — Total absence of cluster lifecycle management (power on/off)
+- **Evidence:** no document mentions `multipass start/stop`. The `ClusterDoctor` assumes an already-healthy cluster; `ARCHITECTURE.md` §4 talks about restoring the baseline via SSH but not about **booting the VMs**.
+- **Impact:** the user's central requirement ("cluster inicializado junto com a aplicação, com botão na tela para ligar" [original pt-BR: cluster started together with the application, with an on-screen button to power it on]) has no owner in the design.
+- **Fix applied:** new component **ClusterPowerManager** (`ARCHITECTURE.md` §9): state machine `off → starting → ready → degraded`, endpoint `POST /api/cluster/power`, instrumented boot sequence (VMs → SSH 22 → ssh-config regen → `/readyz` → nodes Ready → quick doctor → baseline if absent) with progress via SSE. UI: state pill in the header + "Ligar Cluster" [Power On Cluster] CTA when `off` (`UX_UI_SPEC.md` §3). Optional `auto_start_on_launch` flag in Settings.
 
-### 🟡 G8 — Segurança do WebSocket de terminal não especificada
-- **Evidência:** novo vetor de ataque: PTY de shell do host exposto via WS. A exposição remota (ex.: um túnel na frente da porta) é um uso previsto por quem acessa a própria máquina de fora.
-- **Correção aplicada:** terminal WS **somente em `127.0.0.1`**, validação de header `Origin` (same-origin), recusa explícita se o app estiver bindado fora de loopback sem auth, aviso permanente na tela de Configurações. `ARCHITECTURE.md` §10.
+### 🔴 G3 — Bridged IPs are DHCP: kubeconfig and `~/.ssh/config` can break after VM reboot
+- **Evidence:** `deploy-virtual-machines.sh` uses `--bridged` (router DHCP); `README.md`/`ARCHITECTURE.md` treat lab IPs as fixed; the `cka` context kubeconfig points to the controlplane IP hardcoded.
+- **Impact:** if DHCP reassigns IPs after `multipass stop/start`, **everything** stops working (kubectl, SSH, checks) with no obvious diagnosis. This is the gap most likely to become a real incident.
+- **Fix applied:** at the end of boot, the PowerManager (a) reads current IPs via `multipass list --format json`, (b) **regenerates the managed block** `# >>> CKA-ARENA MANAGED >>>` in `~/.ssh/config`, and (c) performs **kubeconfig self-heal**: if `kubectl --context cka get --raw /readyz` fails but SSH responds, it downloads `/etc/kubernetes/admin.conf` from the controlplane via SSH, rewrites `server: https://<ip-atual>:6443`, and updates the `cka` context via `kubectl config set-cluster`. Detailed in `ARCHITECTURE.md` §9.3.
 
-### 🟡 G9 — Telemetria atual não enxerga *como* o usuário resolveu
-- **Evidência:** `check_runs` registra tentativas, mas nada captura a abordagem (imperativo × declarativo, uso de `--dry-run`, etc.).
-- **Correção proposta (opcional, opt-in):** com o terminal no browser, o backend pode manter ring buffer do PTY e extrair comandos (split em prompt) vinculados ao `scenario_id` ativo — tabela `command_audit`. **Privacidade:** local-only, opt-in nas Configurações, purge por sessão. `ARCHITECTURE.md` §6.
+### 🔴 G4 — SSH key bootstrap: first-run flow unspecified (and no `sshpass`)
+- **Evidence:** `PLAN.md` Phase 1 mentions "solicitando/usando a senha padrão do lab `ubuntu` uma única vez" [original pt-BR: asking for/using the lab's default `ubuntu` password a single time], but with no mechanism; `sshpass` is **not installed** on the Mac (verified).
+- **Fix applied:** **`SSH_ASKPASS` + `SSH_ASKPASS_REQUIRE=force`** (OpenSSH ≥ 8.4) to install the public key without interaction — without `sshpass` and without expect. Specified in `ARCHITECTURE.md` §3 (item 5) and validated during the Phase 1 implementation.
 
-### 🟡 G10 — Colisão de portas e conflito de kubeconfig com outros projetos
-- **Evidência:** app planejada na `8765` (porta livre). Porém o `~/.kube/config` compartilhado contém **outros contextos de trabalho** (verificado); qualquer operação `kubectl` do backend **deve** sempre passar `--context cka` explícito (nunca confiar no current-context, que o usuário troca durante o dia).
-- **Correção aplicada:** regra explícita em `ARCHITECTURE.md` §3 (wrapper `cluster.py` sempre injeta `--context`); backend usa kubeconfig dedicado `~/.cka-arena/kubeconfig` copiado do `admin.conf` no primeiro doctor (imune a trocas de current-context do usuário).
-
-### 🟡 G11 — Cenários de `etcd` restore: `etcdctl` existe no Mac, mas restore tem de rodar no nó
-- **Evidência:** `/opt/homebrew/bin/etcdctl` presente no Mac; porém snapshot/restore do CKA exige os certificados e o `etcdctl` da versão correta **no controlplane**, com API v3 e `--data-dir`.
-- **Correção proposta:** spec do gerador (system prompt) já deve restringir comandos etcd a `node: controlplane` via SSH; adicionado como nota no `LLM_SCENARIO_SPEC.md` (check `node_command_exit_zero` com `node: controlplane`). *(Ajuste menor aplicado ao template em §4 do spec.)*
-
-### 🟡 G12 — Weave Net × NetworkPolicy: dependência do `weave-npc`
-- **Evidência:** cenários de NetworkPolicy assumem enforcement; Weave só aplica NetworkPolicy se o `weave-npc` estiver rodando.
-- **Correção proposta:** `ClusterDoctor` verifica pods `weave-npc-*` e reporta addon "NetworkPolicy enforcement: on/off". Adicionado à lista de addons em `ARCHITECTURE.md` §7.
+### 🔴 G5 — No web terminal component specified (neither backend nor frontend)
+- **Evidence:** `ARCHITECTURE.md` §5 (directory tree) has no `terminal.py` nor xterm assets; `pyproject` dependencies list nothing WebSocket/PTY-related.
+- **Impact:** central requirement with no design.
+- **Fix applied:** complete **TerminalService** in `ARCHITECTURE.md` §8: in-process PTY (`pty.openpty` + `TIOCSWINSZ` + reader task per session, zero extra dependencies — FastAPI/uvicorn already support WebSocket), frontend `xterm.js` **vendored in `static/vendor/`** (no CDN, works offline), tabs with presets (`mac`, `controlplane`, `node01`, `node02`), resize, reconnect on page reload (PTY lives in the backend), session limit and idle timeout. **Rejected** alternatives: `ttyd`/`gotty` (external binary, no telemetry audit, no lifecycle control) and `tmux` (not installed — verified; unnecessary given PTY recording in the backend).
 
 ---
 
-## 4. Melhorias Recomendadas (Priorizadas)
+## 3. Medium Gaps (Real Risks, Non-Blocking)
 
-| ID | Melhoria | Prioridade | Onde entra |
+### 🟡 G6 — Sanity check can produce a false "scenario OK" due to image pull latency
+- **Evidence:** `LLM_SCENARIO_SPEC.md` stage 4 applies setup and runs checks immediately; a `pod_status_ready` check can "fail initially" merely because the image is still downloading — and **pass on its own** seconds later, or worse: a legitimate scenario rejected because the check took too long to fail for a real state.
+- **Proposed fix:** after the apply, wait for a **settle window** (pods reaching a stable condition: `Running`/`CrashLoopBackOff`/`ImagePullBackOff` or a 90s timeout) **before** running the sanity check; documented as a pipeline improvement (P1) in `PLAN.md` Phase 3.
+
+### 🟡 G7 — `multipass` daemon down is not handled
+- **Evidence:** `deploy-virtual-machines.sh` has watchdogs for a stuck daemon (comments in the script), but the CKA Arena plan ignores the case.
+- **Proposed fix:** PowerManager detects `multipass list` failing and returns state `daemon_down` with an actionable instruction (`sudo launchctl kickstart -k system/com.canonical.multipass`). Added to `ARCHITECTURE.md` §9.
+
+### 🟡 G8 — Terminal WebSocket security unspecified
+- **Evidence:** new attack vector: host shell PTY exposed via WS. Remote exposure (e.g., a tunnel in front of the port) is an intended use by whoever accesses their own machine from outside.
+- **Fix applied:** terminal WS **only on `127.0.0.1`**, `Origin` header validation (same-origin), explicit refusal if the app is bound outside loopback without auth, permanent warning on the Settings screen. `ARCHITECTURE.md` §10.
+
+### 🟡 G9 — Current telemetry does not see *how* the user solved it
+- **Evidence:** `check_runs` records attempts, but nothing captures the approach (imperative × declarative, use of `--dry-run`, etc.).
+- **Proposed fix (optional, opt-in):** with the terminal in the browser, the backend can keep a ring buffer of the PTY and extract commands (split on prompt) linked to the active `scenario_id` — a `command_audit` table. **Privacy:** local-only, opt-in in Settings, purge per session. `ARCHITECTURE.md` §6.
+
+### 🟡 G10 — Port collision and kubeconfig conflict with other projects
+- **Evidence:** app planned on `8765` (free port). However, the shared `~/.kube/config` contains **other work contexts** (verified); any backend `kubectl` operation **must** always pass an explicit `--context cka` (never trust the current-context, which the user switches during the day).
+- **Fix applied:** explicit rule in `ARCHITECTURE.md` §3 (the `cluster.py` wrapper always injects `--context`); the backend uses a dedicated kubeconfig `~/.cka-arena/kubeconfig` copied from `admin.conf` at the first doctor (immune to the user's current-context switches).
+
+### 🟡 G11 — `etcd` restore scenarios: `etcdctl` exists on the Mac, but restore must run on the node
+- **Evidence:** `/opt/homebrew/bin/etcdctl` present on the Mac; however, CKA snapshot/restore requires the certificates and the `etcdctl` of the correct version **on the controlplane**, with API v3 and `--data-dir`.
+- **Proposed fix:** the generator spec (system prompt) must already restrict etcd commands to `node: controlplane` via SSH; added as a note in `LLM_SCENARIO_SPEC.md` (check `node_command_exit_zero` with `node: controlplane`). *(Minor adjustment applied to the template in §4 of the spec.)*
+
+### 🟡 G12 — Weave Net × NetworkPolicy: dependency on `weave-npc`
+- **Evidence:** NetworkPolicy scenarios assume enforcement; Weave only enforces NetworkPolicy if `weave-npc` is running.
+- **Proposed fix:** `ClusterDoctor` checks `weave-npc-*` pods and reports the addon "NetworkPolicy enforcement: on/off". Added to the addons list in `ARCHITECTURE.md` §7.
+
+---
+
+## 4. Recommended Improvements (Prioritized)
+
+| ID | Improvement | Priority | Where it lands |
 | :--- | :--- | :--- | :--- |
-| M1 | Terminal web integrado (PTY + xterm.js) com abas por nó e Check ao alcance da mão | **P0** | `ARCHITECTURE.md` §8, `UX_UI_SPEC.md` §2, `PLAN.md` Fase 2/4 |
-| M2 | Cluster Power Manager com boot instrumentado + CTA "Ligar Cluster" + `auto_start_on_launch` | **P0** | `ARCHITECTURE.md` §9, `UX_UI_SPEC.md` §3, `PLAN.md` Fase 1 |
-| M3 | Self-heal de kubeconfig + regeneração do bloco SSH pós-boot (DHCP) | **P0** | `ARCHITECTURE.md` §9.3 |
-| M4 | Kubeconfig dedicado `~/.cka-arena/kubeconfig` (imune a current-context do usuário) | **P1** | `ARCHITECTURE.md` §3 |
-| M5 | Bootstrap da chave via `SSH_ASKPASS` (sem `sshpass`/expect) com fallback manual | **P1** | `ARCHITECTURE.md` §3 |
-| M6 | Settle window antes do sanity check (G6) | **P1** | `PLAN.md` Fase 3 |
-| M7 | Audit opcional de comandos do terminal → telemetria de abordagem | **P2** | `ARCHITECTURE.md` §6, §8.5 |
-| M8 | Catálogo de providers (GLM/OpenCode/DeepSeek/Claude/OpenAI-compat) como base do `llm_client.py` | **P1** | `PLAN.md` Fase 3 |
-| M9 | Estado `daemon_down` do multipass com instrução de correção | **P1** | `ARCHITECTURE.md` §9 |
-| M10 | Importação de um histórico de estudo externo para recomendação do próximo domínio | **P2** | `PLAN.md` Fase 5 |
-| M11 | Gateway API / metrics-server / local-path: instalar via Cluster Doctor com detecção `weave-npc` | **P1** | `ARCHITECTURE.md` §7 |
+| M1 | Integrated web terminal (PTY + xterm.js) with per-node tabs and Check within reach | **P0** | `ARCHITECTURE.md` §8, `UX_UI_SPEC.md` §2, `PLAN.md` Phase 2/4 |
+| M2 | Cluster Power Manager with instrumented boot + "Ligar Cluster" [Power On Cluster] CTA + `auto_start_on_launch` | **P0** | `ARCHITECTURE.md` §9, `UX_UI_SPEC.md` §3, `PLAN.md` Phase 1 |
+| M3 | kubeconfig self-heal + SSH block regeneration post-boot (DHCP) | **P0** | `ARCHITECTURE.md` §9.3 |
+| M4 | Dedicated kubeconfig `~/.cka-arena/kubeconfig` (immune to the user's current-context) | **P1** | `ARCHITECTURE.md` §3 |
+| M5 | Key bootstrap via `SSH_ASKPASS` (without `sshpass`/expect) with manual fallback | **P1** | `ARCHITECTURE.md` §3 |
+| M6 | Settle window before the sanity check (G6) | **P1** | `PLAN.md` Phase 3 |
+| M7 | Optional terminal command audit → approach telemetry | **P2** | `ARCHITECTURE.md` §6, §8.5 |
+| M8 | Provider catalog (GLM/OpenCode/DeepSeek/Claude/OpenAI-compat) as the base of `llm_client.py` | **P1** | `PLAN.md` Phase 3 |
+| M9 | multipass `daemon_down` state with correction instruction | **P1** | `ARCHITECTURE.md` §9 |
+| M10 | Import of an external study history for next-domain recommendation | **P2** | `PLAN.md` Phase 5 |
+| M11 | Gateway API / metrics-server / local-path: install via Cluster Doctor with `weave-npc` detection | **P1** | `ARCHITECTURE.md` §7 |
 
 ---
 
-## 5. Decisões de Integração (Síntese do Que Foi Especificado)
+## 5. Integration Decisions (Synthesis of What Was Specified)
 
 ```mermaid
 flowchart LR
-    subgraph Browser["Browser — http://127.0.0.1:8765 (janela única)"]
-        UI["Exam Workspace\n(questão · check · timer)"]
-        Term["Terminal Integrado (xterm.js)\nabas: mac · controlplane · node01 · node02"]
-        Pwr["Pill Cluster: ⏻ Off / ⟳ Starting / ● Ready"]
+    subgraph Browser["Browser — http://127.0.0.1:8765 (single window)"]
+        UI["Exam Workspace\n(question · check · timer)"]
+        Term["Integrated Terminal (xterm.js)\ntabs: mac · controlplane · node01 · node02"]
+        Pwr["Cluster Pill: ⏻ Off / ⟳ Starting / ● Ready"]
     end
     subgraph Backend["FastAPI (127.0.0.1)"]
-        WS["/ws/terminal/{tab}\nTerminalService (PTY host)"]
+        WS["/ws/terminal/{tab}\nTerminalService (host PTY)"]
         PM["ClusterPowerManager\nmultipass start/stop + boot checks"]
         SE["ScenarioEngine\nsetup → check → cleanup"]
         LLM["LLM Generator\n(envelope + self-healing)"]
     end
     Term <-->|WebSocket| WS
-    WS -->|zsh no host: kubectl/ssh/helm| Host["macOS Host"]
+    WS -->|zsh on host: kubectl/ssh/helm| Host["macOS Host"]
     Pwr -->|POST /api/cluster/power| PM
     PM -->|multipass CLI| MPX["Multipass Daemon\ncontrolplane · node01 · node02"]
-    PM -->|SSH bridged (IPs dinâmicos)| MPX
+    PM -->|SSH bridged (dynamic IPs)| MPX
     UI -->|Check| SE
     SE -->|kubectl --context cka / SSH| MPX
     LLM -->|envelope| SE
 ```
 
-**Princípios fixados:**
-1. O terminal executa **no host macOS** (onde vivem `kubectl`, `helm`, `~/.ssh/config`) — nunca dentro de um container; abas de nó são `ssh cka-<nó>` automáticos.
-2. Um **único cenário ativo por vez** no cluster (setup do próximo só no clique de Next) — regra mantida.
-3. O terminal é **persistente no backend**: reload da página reconecta ao mesmo PTY (registro de sessões por `tab_id`).
-4. `Check` é acessível **do painel do terminal** (botão + atalho global ⌘↵) — requisito "executar e pedir validação" no mesmo lugar.
-5. Cluster `off` **bloqueia** Studio e Workspace; a única ação disponível é Ligar (ou restaurar baseline com cluster em estado degradado).
+**Fixed principles:**
+1. The terminal runs **on the macOS host** (where `kubectl`, `helm`, `~/.ssh/config` live) — never inside a container; node tabs are automatic `ssh cka-<node>`.
+2. A **single active scenario at a time** in the cluster (next one's setup only on the Next click) — rule kept.
+3. The terminal is **persistent in the backend**: a page reload reconnects to the same PTY (session registry by `tab_id`).
+4. `Check` is reachable **from the terminal panel** (button + global shortcut ⌘↵) — the "run and ask for validation" requirement in the same place.
+5. Cluster `off` **blocks** Studio and Workspace; the only available action is Power On (or restoring the baseline with the cluster in a degraded state).
 
 ---
 
-## 6. Matriz de Rastreabilidade (Gap → Documentação)
+## 6. Traceability Matrix (Gap → Documentation)
 
-| Gap | Correção documentada em |
+| Gap | Fix documented in |
 | :--- | :--- |
-| G1 terminal browser | `ARCHITECTURE.md` §1/§5/§8 · `UX_UI_SPEC.md` §1/§2 · `PLAN.md` §3.1 |
-| G2 ciclo de vida | `ARCHITECTURE.md` §9 · `UX_UI_SPEC.md` §3 · `PLAN.md` §3.6/Fase 1 |
+| G1 browser terminal | `ARCHITECTURE.md` §1/§5/§8 · `UX_UI_SPEC.md` §1/§2 · `PLAN.md` §3.1 |
+| G2 lifecycle | `ARCHITECTURE.md` §9 · `UX_UI_SPEC.md` §3 · `PLAN.md` §3.6/Phase 1 |
 | G3 DHCP/kubeconfig | `ARCHITECTURE.md` §9.3 |
-| G4 bootstrap chave | `ARCHITECTURE.md` §3 |
-| G5 spec terminal | `ARCHITECTURE.md` §8 · árvore §5 · DB §6 |
-| G6 settle window | `PLAN.md` Fase 3 |
-| G7 daemon multipass | `ARCHITECTURE.md` §9 |
-| G8 segurança WS | `ARCHITECTURE.md` §10 |
-| G9 audit comandos | `ARCHITECTURE.md` §6/§8.5 (opt-in) |
-| G10 kubeconfig dedicado | `ARCHITECTURE.md` §3 |
-| G11 etcd no nó | `LLM_SCENARIO_SPEC.md` §4 (nota) |
+| G4 key bootstrap | `ARCHITECTURE.md` §3 |
+| G5 terminal spec | `ARCHITECTURE.md` §8 · tree §5 · DB §6 |
+| G6 settle window | `PLAN.md` Phase 3 |
+| G7 multipass daemon | `ARCHITECTURE.md` §9 |
+| G8 WS security | `ARCHITECTURE.md` §10 |
+| G9 command audit | `ARCHITECTURE.md` §6/§8.5 (opt-in) |
+| G10 dedicated kubeconfig | `ARCHITECTURE.md` §3 |
+| G11 etcd on the node | `LLM_SCENARIO_SPEC.md` §4 (note) |
 | G12 weave-npc | `ARCHITECTURE.md` §7 |
 
-## 7. Fora de Escopo Desta Revisão
+## 7. Out of Scope for This Review
 
-- Implementação de código (o projeto segue em fase de planejamento; as specs agora cobrem os novos requisitos).
-- Multiusuário / exposição remota da plataforma (local-only por design; ver §10 da arquitetura).
-- Suporte a clusters outros além do `cka` Multipass (kind/k3s/minikube) — arquitetura permite no futuro via interface `ClusterDriver`, mas não é planejado.
+- Code implementation (the project is still in planning; the specs now cover the new requirements).
+- Multi-user / remote exposure of the platform (local-only by design; see §10 of the architecture).
+- Support for clusters other than the `cka` Multipass one (kind/k3s/minikube) — the architecture allows it in the future via the `ClusterDriver` interface, but it is not planned.
 
-
----
-
-## 8. Segunda Auditoria — Geração LLM, Banco de Questões, Check & Teardown (Revisão 2)
-
-> Nova rodada sobre: fluxo de geração com agentes (LangGraph?), banco de questões com sorteio pelas percentuais da prova, contrato do Check e reset limpo do cluster ao fim da sessão. Especificação resultante: **`LLM_PIPELINE_SPEC.md`** (novo).
-
-### 🔴 G13 — Geração acoplada à sessão (sem banco de questões)
-- **Evidência:** `ARCHITECTURE.md` §6 original: tabela `scenarios` com `session_id` — a fila gerada *era* a sessão; questões boas não eram reutilizadas e "praticar de novo" exigia nova geração (custo LLM + risco).
-- **Correção aplicada:** desacoplamento total — geração **publica** em `bank_questions` (ciclo `draft → probed → published → retired`, dedup semântico, envelope imutável, métricas por questão); sessões só referenciam (`session_items`). `ARCHITECTURE.md` §6/§11 · `LLM_PIPELINE_SPEC.md` §3.
-
-### 🔴 G14 — Sem sorteio pelas percentuais da prova
-- **Evidência:** nenhum documento definia como montar a bateria de prática; o Studio antigo gerava N questões direto para a fila.
-- **Correção aplicada:** `draw_exam_sample` com **largest remainder** sobre os pesos CNCF (30/25/20/15/10), renormalização por filtros, fallback de célula vazia e anti-repetição (`times_used ASC, random()`); preview da distribuição na UI antes de iniciar. Calibração: N=15 → 5/4/3/2/1; N=5 → 2/1/1/1/0; N=3 → 1/1/1/0/0. `LLM_PIPELINE_SPEC.md` §4 · `UX_UI_SPEC.md` §5a.
-
-### 🔴 G15 — Nenhuma garantia de que a questão é solúvel
-- **Evidência:** o sanity check só provava que os checks **falhavam** antes do usuário agir — nada provava que existia caminho de solução; questão insolúvel só seria descoberta na prática (o pior momento).
-- **Correção aplicada:** bloco obrigatório **`solution`** no envelope (manifests/comandos automatizáveis) + **Solvability Probe** no Estágio E: aplica a solução num clone de prova e exige 100% PASS antes de publicar. `LLM_SCENARIO_SPEC.md` §1.1 · `LLM_PIPELINE_SPEC.md` §2E.
-
-### 🔴 G16 — Teardown de fim de sessão inexistente
-- **Evidência:** cleanup era só por questão (`cleanup(scenario)`); aborto de sessão no meio de um Boss Fight deixava resíduo acumulando entre sessões. O requisito "cluster zerado e reiniciado limpo" não tinha dono.
-- **Correção aplicada:** teardown em 3 níveis — **L0** por questão, **L1** fim de sessão (label sweep `cka-arena.io/managed` + drift check) e **L2 clean reset** (L1 + restauração do baseline de arquivos dos nós + restart de `containerd`/`kubelet` + drift check). **Atualização da Fase 5 (evidência ao vivo):** snapshots de VM **não são implementados** no backend do Multipass/macOS (`The snapshots feature is not implemented on this backend`) — o L2 foi redefinido sem snapshots e validado com `drift=false`, 3/3 Ready e addons preservados. `LLM_PIPELINE_SPEC.md` §6 · `ARCHITECTURE.md` §12 · `UX_UI_SPEC.md` §5b.
-
-### 🟡 G17 — Semântica do Check informal
-- **Evidência:** o catálogo definia *o que* verificar, mas não *como decidir*: sem distinção FAIL (estado do usuário) × ERROR (infra), sem política de retry, sem veredito formal da questão.
-- **Correção aplicada:** contrato formal — status `PASS`/`FAIL`/`SKIP`/`ERROR` com política de retry (FAIL nunca re-executa sozinho; ERROR 2× com backoff; rodada inválida não consome tentativa), veredito **all-or-nothing** (como a CKA real), evidência `expected/actual` por item, hint com revelação progressiva, timeouts por tipo e settle window. `LLM_PIPELINE_SPEC.md` §5 · `LLM_SCENARIO_SPEC.md` §2.
-
-### 🟡 G18 — Framework de agentes (LangGraph/LangChain) sem avaliação registrada
-- **Evidência:** proposta do usuário de 3 agentes encadeados (normalizador → construtor → validador) sem análise de orquestração.
-- **Correção aplicada:** avaliação comparativa (`LLM_PIPELINE_SPEC.md` §1): os 3 agentes **são mantidos** como estágios LLM com contrato estrito, orquestrados por **máquina de estados própria em async Python** — sem LangGraph/LangChain (fluxo linear com retries limitados não justifica peso/dependência/churn; independência de provider já vem do cliente multi-provider próprio). Gatilhos de revisita documentados (tool-use autônomo, human-in-the-loop resumível).
-
-### Rastreabilidade da Revisão 2
-
-| Gap | Correção documentada em |
-| :--- | :--- |
-| G13 banco | `LLM_PIPELINE_SPEC.md` §3 · `ARCHITECTURE.md` §6/§11 · `PLAN.md` Fase 3 |
-| G14 sorteio | `LLM_PIPELINE_SPEC.md` §4 · `UX_UI_SPEC.md` §5a · `PLAN.md` verificação 6 |
-| G15 solvability | `LLM_SCENARIO_SPEC.md` §1.1 + regra 10 · `LLM_PIPELINE_SPEC.md` §2E |
-| G16 teardown | `LLM_PIPELINE_SPEC.md` §6 · `ARCHITECTURE.md` §12 · `UX_UI_SPEC.md` §5b · `PLAN.md` Fases 1/2 |
-| G17 contrato check | `LLM_PIPELINE_SPEC.md` §5 · `LLM_SCENARIO_SPEC.md` §2 |
-| G18 orquestração | `LLM_PIPELINE_SPEC.md` §1 (comparativo + gatilhos) |
 
 ---
 
-## 9. Terceira Auditoria — Idioma, Formato de Prova e Dificuldade (Revisão 3)
+## 8. Second Audit — LLM Generation, Question Bank, Check & Teardown (Revision 2)
 
-> Mudança de escopo do dono: **sistema 100% inglês** (a prova CKA é em inglês), questões no **formato exato da prova** e níveis de dificuldade **mensuravelmente distintos**.
+> New round over: the agent-based generation flow (LangGraph?), the question bank with the exam-weight draw, the Check contract, and the clean reset of the cluster at the end of the session. Resulting specification: **`LLM_PIPELINE_SPEC.md`** (new).
 
-### 🔴 G19 — Sistema especificado em PT-BR, oposto ao idioma da prova
-- **Evidência:** envelope com `prompt_pt_br`/`reference_solution_pt_br`, regra 1 do system prompt exigindo "Português do Brasil", UI com labels `[Verificar]`/`[Próxima]`/`[Ligar Cluster]` em todos os wireframes e no mockup.
-- **Impacto:** treinar lendo tarefas em PT-BR não constrói a memória muscular de leitura do enunciado em inglês — parte real da performance na prova.
-- **Correção aplicada:** campos renomeados `prompt`/`reference_solution`; regra 1 do prompt e rubrica do Revisor (item 6) exigem **exam voice em inglês**; UI 100% English em todos os specs, wireframes, CTAs (`[Check]`, `[Next]`, `[Skip]`, `⏻ Power On & Practice`, `▶ Practice`, `SESSION COMPLETE`…) e no mockup. `PRODUCT.md` registra o compromisso; docs internos seguem PT-BR. Referência de formato: [killer.sh](https://killer.sh/cka) (simulador oficial) — nova seção `LLM_SCENARIO_SPEC.md` §1.2 com a anatomia exata (título imperativo · Task weight · Use context · contexto-sintoma · "Perform the following tasks" · restrições).
+### 🔴 G13 — Generation coupled to the session (no question bank)
+- **Evidence:** original `ARCHITECTURE.md` §6: `scenarios` table with `session_id` — the generated queue *was* the session; good questions were not reused and "practice again" required new generation (LLM cost + risk).
+- **Fix applied:** full decoupling — generation **publishes** to `bank_questions` (cycle `draft → probed → published → retired`, semantic dedup, immutable envelope, per-question metrics); sessions only reference it (`session_items`). `ARCHITECTURE.md` §6/§11 · `LLM_PIPELINE_SPEC.md` §3.
 
-### 🔴 G20 — Níveis de dificuldade subjetivos (não verificáveis)
-- **Evidência:** a definição anterior dos níveis era prosa ("1 a 2 requisitos claros…") sem banda mensurável nem enforcement — um `boss_fight` fraco passaria.
-- **Correção aplicada:** **rubrica mensurável** (`LLM_SCENARIO_SPEC.md` §5): 8 eixos medidos direto do envelope (requisitos, kinds, escopo, traps, cadeia causal, checks, meta de tempo, peso) com bandas disjuntas por nível + **enforcement no Revisor** (fora da banda em ≥ 2 eixos ⇒ regeneração com delta) e no Gate D (`boss_fight` sem falha de nó é rejeitado). Metas recalibradas: ≤ 4 / ≤ 7 / ≤ 12 min; exemplos calibrados do mesmo domínio nos três níveis ilustram a separação real.
+### 🔴 G14 — No exam-weight draw
+- **Evidence:** no document defined how to assemble the practice battery; the old Studio generated N questions straight into the queue.
+- **Fix applied:** `draw_exam_sample` with **largest remainder** over the CNCF weights (30/25/20/15/10), renormalization by filters, empty-cell fallback, and anti-repetition (`times_used ASC, random()`); distribution preview in the UI before starting. Calibration: N=15 → 5/4/3/2/1; N=5 → 2/1/1/1/0; N=3 → 1/1/1/0/0. `LLM_PIPELINE_SPEC.md` §4 · `UX_UI_SPEC.md` §5a.
 
-### 🟡 G21 — Formato da questão não aderia ao padrão do exame
-- **Evidência:** o `prompt` antigo era prosa livre em PT-BR ("No namespace X, existem os deployments…"), sem título, sem `Task weight`, sem "Use context:", sem bloco de restrições.
-- **Correção aplicada:** anatomia canônica do exame (§1.2) como obrigação do Construtor e critério do Revisor; critério de aceite da Fase 3 (`PLAN.md`) exige questão "(a) em inglês no formato exato da prova".
+### 🔴 G15 — No guarantee the question is solvable
+- **Evidence:** the sanity check only proved that the checks **failed** before the user acted — nothing proved a solution path existed; an unsolvable question would only be discovered during practice (the worst moment).
+- **Fix applied:** mandatory **`solution`** block in the envelope (automatable manifests/commands) + **Solvability Probe** in Stage E: applies the solution to a proof clone and requires 100% PASS before publishing. `LLM_SCENARIO_SPEC.md` §1.1 · `LLM_PIPELINE_SPEC.md` §2E.
 
-### Rastreabilidade da Revisão 3
+### 🔴 G16 — End-of-session teardown nonexistent
+- **Evidence:** cleanup was only per question (`cleanup(scenario)`); aborting a session mid-Boss-Fight left residue accumulating across sessions. The "cluster zeroed and restarted clean" requirement had no owner.
+- **Fix applied:** teardown in 3 levels — **L0** per question, **L1** end of session (label sweep `cka-arena.io/managed` + drift check) and **L2 clean reset** (L1 + restoration of the nodes' file baseline + restart of `containerd`/`kubelet` + drift check). **Phase 5 update (live evidence):** VM snapshots are **not implemented** in the Multipass/macOS backend (`The snapshots feature is not implemented on this backend`) — L2 was redefined without snapshots and validated with `drift=false`, 3/3 Ready, and addons preserved. `LLM_PIPELINE_SPEC.md` §6 · `ARCHITECTURE.md` §12 · `UX_UI_SPEC.md` §5b.
 
-| Gap | Correção documentada em |
+### 🟡 G17 — Check semantics informal
+- **Evidence:** the catalog defined *what* to verify, but not *how to decide*: no FAIL (user state) × ERROR (infra) distinction, no retry policy, no formal question verdict.
+- **Fix applied:** formal contract — status `PASS`/`FAIL`/`SKIP`/`ERROR` with a retry policy (FAIL never re-runs on its own; ERROR 2× with backoff; an invalid round does not consume an attempt), **all-or-nothing** verdict (like the real CKA), `expected/actual` evidence per item, hint with progressive reveal, per-type timeouts, and settle window. `LLM_PIPELINE_SPEC.md` §5 · `LLM_SCENARIO_SPEC.md` §2.
+
+### 🟡 G18 — Agent framework (LangGraph/LangChain) without a recorded evaluation
+- **Evidence:** the user's proposal of 3 chained agents (normalizer → builder → validator) with no orchestration analysis.
+- **Fix applied:** comparative evaluation (`LLM_PIPELINE_SPEC.md` §1): the 3 agents **are kept** as LLM stages with a strict contract, orchestrated by an **own state machine in async Python** — no LangGraph/LangChain (a linear flow with limited retries does not justify the weight/dependency/churn; provider independence already comes from the own multi-provider client). Revisit triggers documented (autonomous tool-use, resumable human-in-the-loop).
+
+### Revision 2 Traceability
+
+| Gap | Fix documented in |
 | :--- | :--- |
-| G19 idioma | `LLM_SCENARIO_SPEC.md` §1/§1.2/§4-regra 1 · `LLM_PIPELINE_SPEC.md` §2 A–C · `UX_UI_SPEC.md` §1/labels · `PRODUCT.md` · `README.md` · `design/mockup-workspace.svg` |
-| G20 dificuldade | `LLM_SCENARIO_SPEC.md` §5 (+ regra 2 do prompt) · `PLAN.md` §2 e Fase 3 |
-| G21 formato de prova | `LLM_SCENARIO_SPEC.md` §1.2 · `PLAN.md` Fase 3 (critério de aceite) |
+| G13 bank | `LLM_PIPELINE_SPEC.md` §3 · `ARCHITECTURE.md` §6/§11 · `PLAN.md` Phase 3 |
+| G14 draw | `LLM_PIPELINE_SPEC.md` §4 · `UX_UI_SPEC.md` §5a · `PLAN.md` verification 6 |
+| G15 solvability | `LLM_SCENARIO_SPEC.md` §1.1 + rule 10 · `LLM_PIPELINE_SPEC.md` §2E |
+| G16 teardown | `LLM_PIPELINE_SPEC.md` §6 · `ARCHITECTURE.md` §12 · `UX_UI_SPEC.md` §5b · `PLAN.md` Phases 1/2 |
+| G17 check contract | `LLM_PIPELINE_SPEC.md` §5 · `LLM_SCENARIO_SPEC.md` §2 |
+| G18 orchestration | `LLM_PIPELINE_SPEC.md` §1 (comparison + triggers) |
+
+---
+
+## 9. Third Audit — Language, Exam Format and Difficulty (Revision 3)
+
+> Scope change from the owner: **system 100% English** (the CKA exam is in English), questions in the **exact exam format** and difficulty levels **measurably distinct**.
+
+### 🔴 G19 — System specified in pt-BR, opposite to the exam language
+- **Evidence:** envelope with `prompt_pt_br`/`reference_solution_pt_br`, rule 1 of the system prompt requiring "Português do Brasil" [Brazilian Portuguese], UI with labels `[Verificar]`/`[Próxima]`/`[Ligar Cluster]` [Check/Next/Power On Cluster] in all wireframes and the mockup.
+- **Impact:** training by reading tasks in pt-BR does not build the muscle memory of reading the question prompt in English — a real part of exam performance.
+- **Fix applied:** fields renamed `prompt`/`reference_solution`; rule 1 of the prompt and the Reviewer's rubric (item 6) require **exam voice in English**; UI 100% English in all specs, wireframes, CTAs (`[Check]`, `[Next]`, `[Skip]`, `⏻ Power On & Practice`, `▶ Practice`, `SESSION COMPLETE`…) and the mockup. `PRODUCT.md` records the commitment; internal docs stay in pt-BR. Format reference: [killer.sh](https://killer.sh/cka) (official simulator) — new section `LLM_SCENARIO_SPEC.md` §1.2 with the exact anatomy (imperative title · Task weight · Use context · context-symptom · "Perform the following tasks" · restrictions).
+
+### 🔴 G20 — Subjective difficulty levels (not verifiable)
+- **Evidence:** the previous definition of the levels was prose ("1 to 2 clear requirements…") with no measurable band nor enforcement — a weak `boss_fight` would pass.
+- **Fix applied:** **measurable rubric** (`LLM_SCENARIO_SPEC.md` §5): 8 axes measured straight from the envelope (requirements, kinds, scope, traps, causal chain, checks, time target, weight) with disjoint bands per level + **enforcement in the Reviewer** (outside the band in ≥ 2 axes ⇒ regeneration with delta) and at Gate D (a `boss_fight` without node failure is rejected). Recalibrated targets: ≤ 4 / ≤ 7 / ≤ 12 min; calibrated examples of the same domain at the three levels illustrate the real separation.
+
+### 🟡 G21 — Question format did not adhere to the exam standard
+- **Evidence:** the old `prompt` was free prose in pt-BR ("No namespace X, existem os deployments…" [original pt-BR: In namespace X, there are the deployments…]), with no title, no `Task weight`, no "Use context:", no restrictions block.
+- **Fix applied:** canonical exam anatomy (§1.2) as an obligation of the Builder and a criterion of the Reviewer; the Phase 3 acceptance criterion (`PLAN.md`) requires a question "(a) in English in the exact exam format".
+
+### Revision 3 Traceability
+
+| Gap | Fix documented in |
+| :--- | :--- |
+| G19 language | `LLM_SCENARIO_SPEC.md` §1/§1.2/§4-rule 1 · `LLM_PIPELINE_SPEC.md` §2 A–C · `UX_UI_SPEC.md` §1/labels · `PRODUCT.md` · `README.md` · `design/mockup-workspace.svg` |
+| G20 difficulty | `LLM_SCENARIO_SPEC.md` §5 (+ rule 2 of the prompt) · `PLAN.md` §2 and Phase 3 |
+| G21 exam format | `LLM_SCENARIO_SPEC.md` §1.2 · `PLAN.md` Phase 3 (acceptance criterion) |

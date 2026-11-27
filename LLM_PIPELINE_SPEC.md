@@ -1,239 +1,239 @@
-# Especificação do Pipeline de Geração LLM, Banco de Questões, Check e Reset — CKA Arena
+# LLM Generation Pipeline, Question Bank, Check and Reset Specification — CKA Arena
 
-> Segunda revisão de design, cobrindo: (1) avaliação **LangGraph/LangChain × pipeline determinístico** para o fluxo de geração multi-agente proposto pelo usuário; (2) **banco de questões** persistente com sorteio pelas **percentagens oficiais da prova**; (3) **contrato formal de avaliação (Check)** — correto/incorreto com semântica exata; (4) **teardown e reset limpo do cluster** ao final da sessão de prática.
+> Second design revision, covering: (1) the **LangGraph/LangChain × deterministic pipeline** evaluation for the user-proposed multi-agent generation flow; (2) a persistent **question bank** with draw by the **official exam percentages**; (3) the **formal evaluation contract (Check)** — pass/fail with exact semantics; (4) **teardown and clean cluster reset** at the end of a practice session.
 >
-> Complementa `LLM_SCENARIO_SPEC.md` (contrato `ScenarioEnvelope` e catálogo de checks — permanece válido) e `ARCHITECTURE.md` (componentes e banco).
+> Complements `LLM_SCENARIO_SPEC.md` (`ScenarioEnvelope` contract and check catalog — still valid) and `ARCHITECTURE.md` (components and database).
 
-> **Documento de referência.** Os conceitos (contratos, gates, níveis de teardown) descrevem o design; as notas marcadas `(v2)`/`(v3)`/`(v4.x)` e as medições "ao vivo" são incrementos históricos, com números do laboratório de referência. Onde divergir, o código prevalece: `app/pipeline/`, `app/bank.py`, `app/sessions.py` e `app/teardown.py`.
+> **Reference document.** The concepts (contracts, gates, teardown levels) describe the design; notes marked `(v2)`/`(v3)`/`(v4.x)` and "live" measurements are historical increments, with numbers from the reference lab. Where they diverge, the code prevails: `app/pipeline/`, `app/bank.py`, `app/sessions.py` and `app/teardown.py`.
 
 ---
 
-## 1. Decisão Executiva: Pipeline Determinístico com "Agentes-Estágio" (sem LangGraph/LangChain)
+## 1. Executive Decision: Deterministic Pipeline with "Stage Agents" (no LangGraph/LangChain)
 
-### 1.1 O que o usuário propôs (e está correto)
+### 1.1 What the user proposed (and is right)
 
-O fluxo de 3 agentes proposto — **Normalizador** (padroniza o pedido num contrato JSON) → **Construtor** (elabora o cenário com YAMLs a aplicar, ex.: YAML defeituoso de troubleshooting) → **Validador** (garante o padrão antes de inserir no banco) — **é a arquitetura certa**. A questão não é *se* usar estágios, é *como orquestrá-los*.
+The proposed 3-agent flow — **Normalizer** (standardizes the request into a JSON contract) → **Builder** (elaborates the scenario with YAMLs to apply, e.g. a troubleshooting broken YAML) → **Validator** (enforces the standard before inserting into the bank) — **is the right architecture**. The question is not *whether* to use stages, it's *how to orchestrate them*.
 
-### 1.2 Avaliação: framework de agentes × orquestração própria
+### 1.2 Evaluation: agent framework × own orchestration
 
-| Critério | LangGraph/LangChain | Pipeline próprio (async Python) |
+| Criterion | LangGraph/LangChain | Own pipeline (async Python) |
 | :--- | :--- | :--- |
-| Natureza do fluxo | Projetado para **grafos cíclicos** com tool-use autônomo, human-in-the-loop e checkpointing durável | Fluxo **linear com retries limitados** e gates determinísticos — basta uma máquina de estados de ~200 linhas |
-| Independência de LLM | Sim, via integrações LangChain | **Já resolvida**: cliente multi-provider próprio (GLM/OpenCode/DeepSeek/Claude/OpenAI-compat, verificado em produção local) |
-| Saída estrita (JSON contrato) | Suporta, mas com camadas de abstração sobre prompts | Pydantic + JSON schema direto no prompt; parse/repair sob controle total |
-| Debug & auditoria | Estado interno do framework | Cada estágio/chamada já é logada em `llm_generations` (SQLite) — sem caixa-preta |
-| Custo de dependência | `langgraph` + `langchain-core` + integrações: árvore pesada, **churn de API intenso** (breaking changes frequentes) | Zero dependências novas (FastAPI/httpx/anthropic já no projeto) |
-| Latência/overhead | Overhead de runtime e serialização de estado | Processo direto, mesmo throughput |
-| Quando o framework ganha | Agente autor rodando `kubectl` num sandbox para auto-testar (tool-loop dinâmico), fluxos resumíveis com aprovação humana | — |
+| Flow nature | Designed for **cyclic graphs** with autonomous tool-use, human-in-the-loop and durable checkpointing | **Linear flow with limited retries** and deterministic gates — a ~200-line state machine suffices |
+| LLM independence | Yes, via LangChain integrations | **Already solved**: own multi-provider client (GLM/OpenCode/DeepSeek/Claude/OpenAI-compat, verified live in production) |
+| Strict output (JSON contract) | Supported, but with abstraction layers over prompts | Pydantic + JSON schema directly in the prompt; parse/repair under full control |
+| Debug & auditability | Framework internal state | Every stage/call is already logged in `llm_generations` (SQLite) — no black box |
+| Dependency cost | `langgraph` + `langchain-core` + integrations: heavy tree, **intense API churn** (frequent breaking changes) | Zero new dependencies (FastAPI/httpx/anthropic already in the project) |
+| Latency/overhead | Runtime and state serialization overhead | Direct process, same throughput |
+| When the framework wins | An authoring agent running `kubectl` in a sandbox to self-test (dynamic tool-loop), resumable flows with human approval | — |
 
-### 1.3 Recomendação (fixada)
+### 1.3 Recommendation (fixed)
 
-1. **Não usar LangGraph/LangChain na Fase atual.** O pipeline é linear com no máximo 2 ciclos de auto-reparo por estágio — grafos e checkpointing seriam peso morto, e o churn de versões dos frameworks é risco real num projeto de longo prazo mantido por 1 pessoa.
-2. **Manter os 3 "agentes" como estágios LLM com contrato estrito** (`pipeline.py`), intercalados com **gates determinísticos de código** e um **prove-out real no cluster**. O termo técnico para o padrão: *cascaded generation with validation gates* — a prática recomendada (Anthropic/OpenAI guidance para structured outputs) para esta classe de tarefa.
-3. **Gatilhos para revisitar LangGraph** (documentados, não implementar antes): (a) permitir que o Construtor **teste o próprio cenário autonomamente** com tool-use (`kubectl` em namespace sandbox) em vez de só emitir JSON; (b) revisão humana resumível de cenários "Boss Fight" antes de publicar; (c) pipeline com >3 ciclos condicionais dinâmicos.
-4. **Roteamento de modelo por estágio** (economia + qualidade): Normalizador e Revisor usam o modelo **flash** (tarefa mecânica/rubrica); Construtor usa o modelo **principal**. Fallback automático de provider em timeout/429 (próximo da lista do catálogo).
+1. **Do not use LangGraph/LangChain in the current Phase.** The pipeline is linear with at most 2 self-repair cycles per stage — graphs and checkpointing would be dead weight, and framework version churn is a real risk in a long-lived project maintained by 1 person.
+2. **Keep the 3 "agents" as LLM stages with a strict contract** (`pipeline.py`), interleaved with **deterministic code gates** and a **real prove-out on the cluster**. The technical term for the pattern: *cascaded generation with validation gates* — the recommended practice (Anthropic/OpenAI guidance for structured outputs) for this class of task.
+3. **Triggers to revisit LangGraph** (documented, do not implement before): (a) letting the Builder **test its own scenario autonomously** with tool-use (`kubectl` in a sandbox namespace) instead of only emitting JSON; (b) resumable human review of "Boss Fight" scenarios before publishing; (c) pipeline with >3 dynamic conditional cycles.
+4. **Model routing per stage** (cost savings + quality): Normalizer and Reviewer use the **flash** model (mechanical task/rubric); Builder uses the **primary** model. Automatic provider fallback on timeout/429 (next in the catalog list).
 
 ---
 
-## 2. O Pipeline de Geração (`app/pipeline/`) — 5 Estágios
+## 2. The Generation Pipeline (`app/pipeline/`) — 5 Stages
 
 ```mermaid
 flowchart TD
-    U["Usuário (Scenario Studio)\ndomínios[] + dificuldade + qtd + foco"] -->|POST /api/generate| A
-    subgraph PIPE["app/pipeline/ — job assíncrono, progresso via SSE"]
-        A["Estágio A · AGENTE NORMALIZADOR (flash)\n→ GenerationRequest JSON canônico"] --> B["Estágio B · AGENTE CONSTRUTOR (principal)\n→ ScenarioEnvelope (1 por chamada, N paralelas)"]
-        B --> C["Estágio C · AGENTE REVISOR (flash)\nrubric: ambiguidade, justiça, escopo dos checks, exam voice EN, difficulty-tier fit, copy_tokens"]
-        C -->|verdict: precisa patch| B
-        C -->|verdict: ok| D["Estágio D · GATES DETERMINÍSTICOS (código, sem LLM)\nPydantic · YAML parse · blocklist · dry-run server"]
-        D -->|erro| B
-        D -->|ok| E["Estágio E · PROVE-OUT NO CLUSTER (código)\n1. setup em namespace de prova\n2. sanity: checks DEVEM falhar\n3. Solvability Probe: aplica solution → checks DEVEM passar\n4. descarta prova"]
-        E -->|falhou| B
+    U["User (Scenario Studio)\ndomains[] + difficulty + count + focus"] -->|POST /api/generate| A
+    subgraph PIPE["app/pipeline/ — async job, progress via SSE"]
+        A["Stage A · NORMALIZER AGENT (flash)\n→ canonical GenerationRequest JSON"] --> B["Stage B · BUILDER AGENT (primary)\n→ ScenarioEnvelope (1 per call, N parallel calls)"]
+        B --> C["Stage C · REVIEWER AGENT (flash)\nrubric: ambiguity, fairness, check scope, exam voice EN, difficulty-tier fit, copy_tokens"]
+        C -->|verdict: needs patch| B
+        C -->|verdict: ok| D["Stage D · DETERMINISTIC GATES (code, no LLM)\nPydantic · YAML parse · blocklist · server dry-run"]
+        D -->|error| B
+        D -->|ok| E["Stage E · PROVE-OUT ON CLUSTER (code)\n1. setup in a probe namespace\n2. sanity: checks MUST fail\n3. Solvability Probe: applies solution → checks MUST pass\n4. discards probe"]
+        E -->|failed| B
     end
     E -->|ok| BANK[("bank_questions\nstate: published")]
-    B -->|orçamento de correções esgotado| QUAR["bank_questions\nstate: draft + erro\n(sujeita a reparo manual)"]
+    B -->|repair budget exhausted| QUAR["bank_questions\nstate: draft + error\n(eligible for manual repair)"]
 ```
 
-### Estágio A — Agente Normalizador (modelo flash)
-- **Entrada:** seleção bruta da UI: `domains[]`, `subtopics[]` (opcional), `difficulty`, `count`, `focus_hint` (texto livre de 1 linha — aceito em qualquer idioma; o agente o traduz em constraints **em inglês**). Idioma fixo de saída do pipeline inteiro: **`en-US`** (o sistema é 100% inglês).
-- **Saída:** `GenerationRequest` — contrato JSON canônico (Pydantic): pesos renormalizados dos domínios escolhidos, sub-tópicos válidos por domínio (catálogo fechado), dificuldade normalizada (`exam_standard|killer_hardcore|boss_fight`), restrições do foco convertidas em constraints declarativas (ex.: *"excluir Helm"* → `exclude_tools: ["helm"]`).
-- **Por que um agente:** o `focus_hint` é linguagem natural; o contrato tem que ser inequívoco e auditável. O Normalizador é a única tradução NL→contrato, com validação Pydantic e retry com erro exato.
-- **Idempotência:** mesmo input → mesmo contrato (temperature 0).
+### Stage A — Normalizer Agent (flash model)
+- **Input:** raw UI selection: `domains[]`, `subtopics[]` (optional), `difficulty`, `count`, `focus_hint` (free-form 1-line text — accepted in any language; the agent translates it into **English** constraints). Fixed output language of the whole pipeline: **`en-US`** (the system is 100% English).
+- **Output:** `GenerationRequest` — canonical JSON contract (Pydantic): renormalized weights of the chosen domains, valid sub-topics per domain (closed catalog), normalized difficulty (`exam_standard|killer_hardcore|boss_fight`), focus restrictions converted into declarative constraints (e.g. *"exclude Helm"* → `exclude_tools: ["helm"]`).
+- **Why an agent:** the `focus_hint` is natural language; the contract must be unambiguous and auditable. The Normalizer is the only NL→contract translation, with Pydantic validation and retry with the exact error.
+- **Idempotency:** same input → same contract (temperature 0).
 
-### Estágio B — Agente Construtor (modelo principal)
-- Gera **um cenário por chamada** (`ScenarioEnvelope`); N cenários = N chamadas paralelas com `seed`/`temperature` levemente variados para diversidade.
-- System prompt = template do `LLM_SCENARIO_SPEC.md` §4 + topologia real coletada do cluster + `GenerationRequest` do Estágio A.
-- Extensão obrigatória do envelope (nova): bloco **`solution`** (manifests + comandos da solução de referência **aplicáveis de forma automatizada** — não prosa) — insumo do Solvability Probe (§5). O `prompt` sai em **inglês no formato exato da prova** (anatomia killer.sh/PSI — `LLM_SCENARIO_SPEC.md` §1.2); prosa didática vai em `reference_solution`.
+### Stage B — Builder Agent (primary model)
+- Generates **one scenario per call** (`ScenarioEnvelope`); N scenarios = N parallel calls with slightly varied `seed`/`temperature` for diversity.
+- System prompt = template from `LLM_SCENARIO_SPEC.md` §4 + real topology collected from the cluster + the Stage A `GenerationRequest`.
+- Mandatory envelope extension (new): the **`solution`** block (manifests + commands of the reference solution **applicable in an automated way** — not prose) — input for the Solvability Probe (§5). The `prompt` comes out **in English in the exact exam format** (killer.sh/PSI anatomy — `LLM_SCENARIO_SPEC.md` §1.2); didactic prose goes in `reference_solution`.
 
-### Estágio C — Agente Revisor (modelo flash) — "crítico frio"
-- Recebe o envelope + a **rubrica** e devolve `{verdict: approve|patch, issues[], patch_suggestions[]}`.
-- Rubrica fixa: (1) requisito é objetivamente verificável pelos checks declarados? (2) armadilhas são justas (não traps de interpretação)? (3) checks testam estado resultante e não comandos? (4) todo identificador crítico está em `copy_tokens` e entre crases? (5) `solution` realmente resolve cada check? (6) **exam voice:** o texto todo está em inglês técnico no formato/voz do exame real (título imperativo, contexto-sintoma, "Perform the following tasks", restrições — §1.2 do spec)? **Eixos numéricos de banda ficam FORA da rubrica** (v2): o gate D os mede exatamente e faz clamp de `weight`/`minutes` — o Revisor foi visto rejeitando `estimated_minutes=4.0` "fora da banda 1–4" (falso), e cada falso `patch` custava um rebuild com thinking.
-- **O Revisor não é gate final** — ele melhora qualidade; os gates que decidem são D e E (determinísticos). Máx. 1 ciclo B←C por cenário (depois segue para D com as issues anotadas; D/E são quem reprova de verdade). C roda **em paralelo** com D (v2).
+### Stage C — Reviewer Agent (flash model) — "cold critic"
+- Receives the envelope + the **rubric** and returns `{verdict: approve|patch, issues[], patch_suggestions[]}`.
+- Fixed rubric: (1) is the requirement objectively verifiable by the declared checks? (2) are the traps fair (not interpretation traps)? (3) do checks test resulting state rather than commands? (4) is every critical identifier in `copy_tokens` and between backticks? (5) does `solution` actually solve every check? (6) **exam voice:** is the entire text in technical English in the real exam's format/voice (imperative title, context-symptom, "Perform the following tasks", restrictions — §1.2 of the spec)? **Numeric band axes stay OUT of the rubric** (v2): gate D measures them exactly and clamps `weight`/`minutes` — the Reviewer was seen rejecting `estimated_minutes=4.0` as "outside the 1–4 band" (false), and each false `patch` cost a thinking rebuild.
+- **The Reviewer is not the final gate** — it improves quality; the deciding gates are D and E (deterministic). Max. 1 B←C cycle per scenario (afterwards it proceeds to D with the issues annotated; D/E are the ones that truly reject). C runs **in parallel** with D (v2).
 
-### Estágio D — Gates Determinísticos (sem LLM)
-1. Schema Pydantic do envelope (campos, tipos, enums).
-2. `yaml.safe_load_all` em todos os manifests (setup + solution).
-3. Blocklist de segurança (`LLM_SCENARIO_SPEC.md` §3) + `backup_paths` obrigatórios.
-4. `kubectl apply --dry-run=server` dos manifests (quando o alvo da quebra não for o apiserver).
-5. Checks sintaticamente executáveis (kinds existentes no cluster v1.37.2, imagens multi-arch/arm64 da whitelist).
+### Stage D — Deterministic Gates (no LLM)
+1. Envelope Pydantic schema (fields, types, enums).
+2. `yaml.safe_load_all` on all manifests (setup + solution).
+3. Security blocklist (`LLM_SCENARIO_SPEC.md` §3) + mandatory `backup_paths`.
+4. `kubectl apply --dry-run=server` on the manifests (when the break target is not the apiserver).
+5. Checks syntactically executable (kinds existing in the v1.37.2 cluster, multi-arch/arm64 images from the whitelist).
 
-### Estágio E — Prove-Out no Cluster (a inovação-chave deste design)
-Roda **no cluster real, em namespace efêmero de prova** (`cka-arena-prove-<uuid>`, descartado ao final):
-1. **Setup de prova:** aplica `setup.manifests` (adaptados ao namespace de prova quando o cenário for namespace-scoped) e `setup.node_commands` **não** rodam aqui — comandos de nó são provados apenas nos níveis `boss_fight` e com backup automático (custo maior, taxa menor).
-2. **Sanity Check (regra de ouro):** todos os checks devem **FALHAR** logo após o setup. Se algum passar → cenário trivia → reprova.
-3. **Solvability Probe:** aplica `solution.manifests`/`solution.commands` e verifica que **100% dos checks PASSAM**. Cenário insolúvel (ou solução errada) → reprova com o erro exato de volta ao Construtor.
-4. Descarte do namespace de prova.
-- **Custo/benefício:** adiciona ~10–30s por cenário; elimina a classe de erro mais custosa para o usuário (questão impossível descoberta no meio da prática). Configurável: sempre ligado; `boss_fight` com node_commands pula o probe de nó e valida só estágios A–D (documentado na questão).
-- Cenários que falham E voltam ao Construtor com a **evidência por check** (expected/got/exit/stderr, ≤2 retries); esgotados → `bank_questions.state = draft` com o erro registrado (nunca servem para prática; úteis para tuning de prompt).
+### Stage E — Prove-Out on the Cluster (the key innovation of this design)
+Runs **on the real cluster, in an ephemeral probe namespace** (`cka-arena-prove-<uuid>`, discarded at the end):
+1. **Probe setup:** applies `setup.manifests` (adapted to the probe namespace when the scenario is namespace-scoped) and `setup.node_commands` do **not** run here — node commands are only proved at the `boss_fight` levels and with automatic backup (higher cost, lower rate).
+2. **Sanity Check (golden rule):** all checks must **FAIL** right after setup. If any passes → trivial scenario → reject.
+3. **Solvability Probe:** applies `solution.manifests`/`solution.commands` and verifies that **100% of the checks PASS**. Unsolvable scenario (or wrong solution) → reject with the exact error back to the Builder.
+4. Discard the probe namespace.
+- **Cost/benefit:** adds ~10–30s per scenario; eliminates the most costly class of error for the user (an impossible question discovered mid-practice). Configurable: always on; `boss_fight` with node_commands skips the node probe and validates only stages A–D (documented in the question).
+- Scenarios that fail E go back to the Builder with **per-check evidence** (expected/got/exit/stderr, ≤2 retries); budget exhausted → `bank_questions.state = draft` with the error recorded (never served for practice; useful for prompt tuning).
 
-### Notas de implementação — modelos de reasoning (Fase 3, verificadas ao vivo)
+### Implementation notes — reasoning models (Phase 3, verified live)
 
-- **DeepSeek V4.1 Flash / V4 Pro são modelos de reasoning:** uma geração de envelope gasta ~10–16k tokens de raciocínio antes do JSON. Com `max_tokens` baixo a resposta chega **vazia ou truncada** (`finish_reason: length`) — não é falha de parsing.
-- **Receita que funciona (validada):** `response_format: {"type": "json_object"}` + `max_tokens = 40000` para o Construtor, 6000 para o Revisor, 4000 para o Normalizador; timeout do provider elevado para 300s no DeepSeek; `finish_reason: length` tratado como erro de provider; `reasoning_content` como fallback quando `content` vazio.
+- **DeepSeek V4.1 Flash / V4 Pro are reasoning models:** one envelope generation spends ~10–16k reasoning tokens before the JSON. With a low `max_tokens` the answer arrives **empty or truncated** (`finish_reason: length`) — not a parsing failure.
+- **Recipe that works (validated):** `response_format: {"type": "json_object"}` + `max_tokens = 40000` for the Builder, 6000 for the Reviewer, 4000 for the Normalizer; provider timeout raised to 300s on DeepSeek; `finish_reason: length` treated as a provider error; `reasoning_content` as fallback when `content` is empty.
 
-### Otimizações de velocidade (Fase 3, medidas ao vivo)
+### Speed optimizations (Phase 3, measured live)
 
-| Alavanca | Medida | Efeito medido |
+| Lever | Measure | Measured effect |
 | :--- | :--- | :--- |
-| **Desligar thinking** | `thinking: {"type": "disabled"}` (default do DeepSeek no cliente; env `CKA_LLM_THINKING=on` religa) | **45.8s → 4.7s** por chamada do Construtor (~10×), JSON válido — `reasoning_effort` é ignorado pelo provider |
-| **Deep condicional (v2)** | thinking no retry **só quando a falha exige raciocínio** (`schema` ou `probe`); correções de gates/revisão são mecânicas e rodam fast | correções de ~45s passam a ~5s |
-| **Gates ∥ Revisor (v2)** | D e C são leitura independente e rodam em paralelo após o schema | −~4s por tentativa |
-| **Clamp de banda (v2)** | `weight`/`estimated_minutes` fora da banda são **clamped deterministicamente** — nunca custam rodada de LLM | elimina a classe inteira de correções numéricas |
-| **Revisor sem banda numérica (v2)** | rubrica C proíbe julgar eixos numéricos (`DO NOT judge numeric band`) — a banda é do gate D | mata o falso `patch` ("minutes=4 fora de 1–4") que forçava rebuild thinking em 100% das questões do run baseline |
-| **Orçamento por tier (v3)** | killer/boss: **4 ciclos de correção / 8 tentativas** (exam mantém 2/6); thinking ligado em toda correção após a 1ª nas tiers duras | mais chance de convergir onde a quarentena se concentrava (8 boss + 10 killer de 21 drafts) |
-| **Veredito anti-oscilação (v3)** | probe final aceita com **2 rodadas all-PASS consecutivas** ou **todo check PASS em ≥2 dos últimos 3 rounds** | blips de DNS/endpoint deixam de condenar cenário solucionável (caso real: 4↔5/6 oscilando até o deadline) |
-| **`-f` estrito (v3)** | gate rejeita **qualquer** target que não seja `-` — incluindo `/tmp/x.yaml` (paths absolutos escapavam) e URLs | fecha a classe boss `apply -f /tmp/atlas-configmap.yaml` |
-| **node_commands idempotentes (v3)** | gate reescreve `mkdir` → `mkdir -p` e dá auto-sudo a mutação em path absoluto fora de /home (/tmp incluído) — a tentativa anterior pode ter criado o dir como root | fecha a classe `mkdir /tmp/cka-boss-checks: Permission denied` (última quarentena do run de verificação) |
-| **Addendum hard-tier (v3)** | prompt das tiers duras ganha regras A–F (YAML em manifests, upsert vs expose, SSH/sudo/backup, checks determinísticos com retry-loop no comando, padrão boss multi-camada, mapeamento falha↔check 1:1) + **exemplar real publicado** (seed `sn-networkpolicy-dns`) injetado | ancora o builder num formato que passa gates+probe — carregado do seed, nunca diverge da verdade |
-| **Normalizador fast-path** | pedido já estruturado (domínios/dificuldade válidos, sem `focus_hint`) pula a chamada LLM | −1 chamada por job no caso comum |
-| **Slots paralelos** | até 3 Construtores concorrentes (semáforo); **probe serializado** por lock (cluster é um recurso só) | job de N questões ≈ max(LLM) + N×probe, em vez de N×(LLM+probe) |
-| **Settle 1× por fase (v2)** | settle após o apply do setup (cap 45s) e após a solution (cap 15s — o poll cobre a convergência); **polls de checks rodam com `settle=False`** — antes `run_checks(settle=True)` re-settlava (≤60s) a cada ciclo de poll | probes com pods Pending-de-propósito deixam de pagar 60s por ciclo |
-| **Poll progressivo + fast-fail (v2)** | cadência 2s (4 primeiros) → 5s; sanity deadline 90→45s com trivial fast-fail após 2 polls; solution 120→90s; timeouts de comando 180→60s | menos tempo ocioso por probe |
-| **Repair informado (v4.4)** | o repair recebe **todos os checks** (PASS/FAIL/ERROR + evidência) e um **digest vivo** dos namespaces (pods/ready/reason, selectors, endpoints) — antes só via os checks que falharam | elimina o ponto cego do repair: causa real (selector/port/Pending/CrashLoop) visível → correção certeira |
-| **Orçamento boss 10/5 + settle final 15s (v4.4)** | boss: 10 tentativas/5 correções; settle pós-solution encurtado (o poll de 90s cobre convergência) | convergência com menos tempo morto por probe |
-| **jsonpath sem chaves (v4.2)** | `normalize_params` envolve jsonpath em `{}` quando o modelo esquece (`.spec.x` → `{.spec.x}`) e o gate aplica a mesma normalização | classe real de quarentena boss: kubectl imprimia o literal e o check dava FAIL falso |
-| **Infra dentro da janela (v4.1)** | sanity/final tratam check `ERROR` como **retryável dentro do deadline** (3s), não como veredito; rounds com ERROR não entram no histórico anti-oscilação; retries de infra no cenário 2→3 | elimina aborto precoce por cluster lento/pod subindo (classe dominante nos drafts) |
-| **Infra × conteúdo (v4)** | probe devolve `ok/content/infra`; erro de infraestrutura (cluster/ssh/timeout) é **retentado no mesmo envelope até 2×** sem consumir orçamento de correção nem culpar o modelo; só infra persistente quarentena como `infra:` | elimina a classe dominante observada: "erro de infraestrutura no sanity check" queimando 4 ciclos e virando quarentena |
-| **Solver-repair (v4)** | probe falho por conteúdo → LLM **repara só `solution`/`checks`** com a evidência (setup/prompt congelados), re-valida gates + probe inline; até 2 repairs; ao esgotar o orçamento há um **salvage** final nessa mesma via | converte quase-acertos em publicados sem relaxar a validação; menos tokens e zero regressão de setup |
-| **jsonpath LIST mode (v4)** | `kubectl_jsonpath` aceita `kind + label_selector` sem `name` (ex.: "todos os pods do Deployment rodam em node01") — checker monta `get <kind> -l ...` | corrige a classe killer "pods-on-node01 got=None" (o validador antigo exigia objeto único) |
-| **host_file_contains com sudo (v4)** | leitura de arquivos do nó tenta `cat` e, se falhar, `sudo cat`; evidência distingue *permission denied* de *not found*; gate exige path absoluto sob raízes reais (`/etc/kubernetes`, `/var/lib/kubelet`, `/opt`…) | corrige falsos "arquivo não existe" em manifests root-only (boss) |
-| **Namespace consistency (v4)** | todo `metadata.namespace` de manifests deve constar em `setup.namespaces` (gate) — o engine só espera/reaproveita namespaces declarados | evita `Forbidden: … terminating`/cross-ns em retries |
-| **Evidência na correção (v2)** | falha de probe devolve **expected/got/exit/stderr por check** (`_failure_detail`), não só os ids | a LLM corrige de primeira — alvo direto da taxa de quarentena (60% histórica: "solução não resolve os checks") |
+| **Disable thinking** | `thinking: {"type": "disabled"}` (DeepSeek default in the client; env `CKA_LLM_THINKING=on` re-enables) | **45.8s → 4.7s** per Builder call (~10×), valid JSON — `reasoning_effort` is ignored by the provider |
+| **Conditional deep (v2)** | thinking on retry **only when the failure demands reasoning** (`schema` or `probe`); gate/review fixes are mechanical and run fast | fixes go from ~45s to ~5s |
+| **Gates ∥ Reviewer (v2)** | D and C are independent reads and run in parallel after the schema | −~4s per attempt |
+| **Band clamp (v2)** | `weight`/`estimated_minutes` outside the band are **clamped deterministically** — never cost an LLM round | eliminates the entire class of numeric fixes |
+| **Reviewer without numeric band (v2)** | C rubric forbids judging numeric axes (`DO NOT judge numeric band`) — the band belongs to gate D | kills the false `patch` ("minutes=4 outside 1–4") that forced a thinking rebuild on 100% of the baseline run's questions |
+| **Per-tier budget (v3)** | killer/boss: **4 repair cycles / 8 attempts** (exam keeps 2/6); thinking enabled on every repair after the 1st on the hard tiers | more chance of converging where quarantine concentrated (8 boss + 10 killer of 21 drafts) |
+| **Anti-oscillation verdict (v3)** | final probe accepts with **2 consecutive all-PASS rounds** or **every check PASS in ≥2 of the last 3 rounds** | DNS/endpoint blips no longer condemn a solvable scenario (real case: 4↔5/6 oscillating until the deadline) |
+| **Strict `-f` (v3)** | gate rejects **any** target that is not `-` — including `/tmp/x.yaml` (absolute paths escaped) and URLs | closes the boss class `apply -f /tmp/atlas-configmap.yaml` |
+| **Idempotent node_commands (v3)** | gate rewrites `mkdir` → `mkdir -p` and auto-sudos a mutation at an absolute path outside /home (/tmp included) — the previous attempt may have created the dir as root | closes the class `mkdir /tmp/cka-boss-checks: Permission denied` (last quarantine of the verification run) |
+| **Hard-tier addendum (v3)** | the hard-tier prompt gains rules A–F (YAML in manifests, upsert vs expose, SSH/sudo/backup, deterministic checks with retry-loop in the command, multi-layer boss pattern, 1:1 failure↔check mapping) + a **published real exemplar** (seed `sn-networkpolicy-dns`) injected | anchors the builder on a format that passes gates+probe — loaded from the seed, never diverges from ground truth |
+| **Normalizer fast-path** | already-structured request (valid domains/difficulty, no `focus_hint`) skips the LLM call | −1 call per job in the common case |
+| **Parallel slots** | up to 3 concurrent Builders (semaphore); **probe serialized** by lock (the cluster is a single resource) | job of N questions ≈ max(LLM) + N×probe, instead of N×(LLM+probe) |
+| **Settle 1× per phase (v2)** | settle after the setup apply (cap 45s) and after the solution (cap 15s — the poll covers convergence); **check polls run with `settle=False`** — previously `run_checks(settle=True)` re-settled (≤60s) every poll cycle | probes with intentional-Pending pods stop paying 60s per cycle |
+| **Progressive poll + fast-fail (v2)** | cadence 2s (first 4) → 5s; sanity deadline 90→45s with trivial fast-fail after 2 polls; solution 120→90s; command timeouts 180→60s | less idle time per probe |
+| **Informed repair (v4.4)** | the repair receives **all checks** (PASS/FAIL/ERROR + evidence) and a **live digest** of the namespaces (pods/ready/reason, selectors, endpoints) — previously it only saw the failed checks | eliminates the repair blind spot: real cause (selector/port/Pending/CrashLoop) visible → precise fix |
+| **Boss budget 10/5 + final settle 15s (v4.4)** | boss: 10 attempts/5 repairs; post-solution settle shortened (the 90s poll covers convergence) | convergence with less dead time per probe |
+| **Keyless jsonpath (v4.2)** | `normalize_params` wraps jsonpath in `{}` when the model forgets (`.spec.x` → `{.spec.x}`) and the gate applies the same normalization | real boss quarantine class: kubectl printed the literal and the check gave a false FAIL |
+| **Infra within the window (v4.1)** | sanity/final treat an `ERROR` check as **retryable within the deadline** (3s), not as a verdict; rounds with ERROR don't enter the anti-oscillation history; infra retries in the scenario 2→3 | eliminates early abort from a slow cluster/pod coming up (dominant class in drafts) |
+| **Infra × content (v4)** | the probe returns `ok/content/infra`; an infrastructure error (cluster/ssh/timeout) is **retried on the same envelope up to 2×** without consuming the repair budget or blaming the model; only persistent infra quarantines as `infra:` | eliminates the observed dominant class: "infrastructure error in the sanity check" burning 4 cycles and turning into quarantine |
+| **Solver-repair (v4)** | probe failed on content → LLM **repairs only `solution`/`checks`** with the evidence (setup/prompt frozen), re-validates gates + probe inline; up to 2 repairs; budget exhausted → a final **salvage** through this same path | converts near-misses into published without relaxing validation; fewer tokens and zero setup regression |
+| **jsonpath LIST mode (v4)** | `kubectl_jsonpath` accepts `kind + label_selector` without `name` (e.g. "all pods of the Deployment run on node01") — the checker builds `get <kind> -l ...` | fixes the killer class "pods-on-node01 got=None" (the old validator required a single object) |
+| **host_file_contains with sudo (v4)** | node file reading tries `cat` and, on failure, `sudo cat`; evidence distinguishes *permission denied* from *not found*; gate requires an absolute path under real roots (`/etc/kubernetes`, `/var/lib/kubelet`, `/opt`…) | fixes false "file does not exist" in root-only manifests (boss) |
+| **Namespace consistency (v4)** | every `metadata.namespace` of manifests must appear in `setup.namespaces` (gate) — the engine only waits/reuses declared namespaces | avoids `Forbidden: … terminating`/cross-ns on retries |
+| **Evidence in the repair (v2)** | a probe failure returns **expected/got/exit/stderr per check** (`_failure_detail`), not just the ids | the LLM fixes on the first pass — direct target of the quarantine rate (60% historical: "solution doesn't solve the checks") |
 
-- **Provider por config:** `llm_config.json` do projeto (editável em **Settings → AI provider**) → env `CKA_LLM_*`; GLM primário quando a chave existir; DeepSeek como fallback/principal conforme disponibilidade.
-- **Modelos são escolhidos por dropdown** (catálogo por provider em `app/llm_client.py`, sem digitação — a lista abaixo é um retrato e pode defasar): GLM Coding Plan `glm-5.3`/`glm-5.3-flash` no endpoint OpenAI-compatible `https://api.z.ai/api/coding/paas/v4` (reasoning sempre ativo; `reasoning_effort` low no fast path, max no deep); DeepSeek `deepseek-v4-pro`/`deepseek-flash`; Claude Fable/Opus/Sonnet/Haiku; GPT-6.2 Sol/Astra, GPT-6.1 Terra, GPT-6 Luna; OpenCode Zen (DeepSeek/GLM/Claude/GPT); Ollama local (endpoint OpenAI-compatible em `http://127.0.0.1:11434/v1`).
+- **Provider by config:** the project's `llm_config.json` (editable in **Settings → AI provider**) → env `CKA_LLM_*`; GLM primary when the key exists; DeepSeek as fallback/primary according to availability.
+- **Models are chosen via dropdown** (catalog per provider in `app/llm_client.py`, no typing — the list below is a snapshot and may go stale): GLM Coding Plan `glm-5.3`/`glm-5.3-flash` at the OpenAI-compatible endpoint `https://api.z.ai/api/coding/paas/v4` (reasoning always on; `reasoning_effort` low on the fast path, max on deep); DeepSeek `deepseek-v4-pro`/`deepseek-flash`; Claude Fable/Opus/Sonnet/Haiku; GPT-6.2 Sol/Astra, GPT-6.1 Terra, GPT-6 Luna; OpenCode Zen (DeepSeek/GLM/Claude/GPT); local Ollama (OpenAI-compatible endpoint at `http://127.0.0.1:11434/v1`).
 
-### Concorrência
-- Um job de geração por vez (o cluster é um recurso só); até 3 Construtores em paralelo (`asyncio.Semaphore(3)`); cenários puramente *namespace-scoped* são provados em namespaces efêmeros, com até 2 probes simultâneos (`Semaphore(2)`); cenários com `node_commands`, recursos cluster-scoped ou `destructive` ficam no lock exclusivo do probe.
+### Concurrency
+- One generation job at a time (the cluster is a single resource); up to 3 Builders in parallel (`asyncio.Semaphore(3)`); purely *namespace-scoped* scenarios are proved in ephemeral namespaces, with up to 2 simultaneous probes (`Semaphore(2)`); scenarios with `node_commands`, cluster-scoped resources or `destructive` take the exclusive probe lock.
 
 ---
 
-### 2.1 Geração guiada por arquétipos e incidentes causais (CKA Arena v3+)
+### 2.1 Archetype- and causal-incident-guided generation (CKA Arena v3+)
 
-A partir do upgrade arquitetural v3, o Construtor não parte de um prompt genérico: cada slot do job nasce planejado.
+From the v3 architectural upgrade on, the Builder doesn't start from a generic prompt: every job slot is born planned.
 
-- **Currículo (`app/curriculum.py`):** catálogo de arquétipos do CKA — domínio, sub-tópicos, kinds e tipos de check exigidos, armadilhas do tópico, addons necessários — mais **blueprints de incidentes causais** para `boss_fight` (várias falhas no mesmo sistema, com cadeia de causa e efeito).
-- **Slot Planner (`app/planner.py`):** distribui os N slots do pedido priorizando as células vazias da grade domínio×dificuldade, evita arquétipos e títulos recentes e atribui um namespace de negócio neutro por slot.
-- **Construtor com slot brief:** o prompt recebe o brief do arquétipo, a banda de dificuldade e um exemplar few-shot do mesmo domínio/nível; o gate `archetype_alignment_errors()` rejeita envelopes que não cumprem `required_kinds`, `required_check_types` e `required_keywords`.
-- **Revisor e feedback:** o Revisor julga o envelope contra o brief; o feedback do usuário sobre uma questão (`question_feedback`) realimenta o planner.
-- **Geração direcionada:** `POST /api/generate/fill-gaps`, `POST /api/generate/fill-archetypes` e `POST /api/generate/archetype/{archetype_id}`.
+- **Curriculum (`app/curriculum.py`):** CKA archetype catalog — domain, sub-topics, required kinds and check types, topic traps, required addons — plus **causal incident blueprints** for `boss_fight` (multiple failures in the same system, with a cause-and-effect chain).
+- **Slot Planner (`app/planner.py`):** distributes the N slots of the request prioritizing the empty cells of the domain×difficulty grid, avoids recent archetypes and titles, and assigns a neutral business namespace per slot.
+- **Builder with slot brief:** the prompt receives the archetype brief, the difficulty band and a same-domain/level few-shot exemplar; the `archetype_alignment_errors()` gate rejects envelopes that fail `required_kinds`, `required_check_types` and `required_keywords`.
+- **Reviewer and feedback:** the Reviewer judges the envelope against the brief; user feedback on a question (`question_feedback`) feeds back into the planner.
+- **Targeted generation:** `POST /api/generate/fill-gaps`, `POST /api/generate/fill-archetypes` and `POST /api/generate/archetype/{archetype_id}`.
 
-> Histórico: antes disso, as tiers duras eram geradas por composição de *fault-units* pré-validadas (`app/composer.py` + `app/fault_units.py`, iteração v5 do pipeline). Esses módulos foram removidos; o registro está em `IMPROVEMENT_PLAN.md` e `ARCHITECTURE_V3_PLAN.md`.
+> History: before that, the hard tiers were generated by composing pre-validated *fault-units* (`app/composer.py` + `app/fault_units.py`, pipeline iteration v5). Those modules were removed; the record is in `IMPROVEMENT_PLAN.md` and `ARCHITECTURE_V3_PLAN.md`.
 
-## 3. Banco de Questões (`bank_questions`)
+## 3. Question Bank (`bank_questions`)
 
-### 3.1 Mudança de Modelo (era: geração → sessão acoplada)
+### 3.1 Model Change (was: generation → coupled session)
 
-No design anterior, `scenarios` pertencia a `sessions` (a fila gerada era a sessão). Agora: **geração alimenta o banco; prática consome o banco** — desacoplamento total entre "produzir questões" e "praticar".
+In the previous design, `scenarios` belonged to `sessions` (the generated queue was the session). Now: **generation feeds the bank; practice consumes the bank** — full decoupling between "producing questions" and "practicing".
 
-| Tabela | Colunas | Papel |
+| Table | Columns | Role |
 | :--- | :--- | :--- |
-| `bank_questions` | `id`, `envelope_json`, `envelope_hash`, `domain`, `subtopics_json`, `difficulty`, `weight_pct`, `estimated_minutes`, `source` (`llm`\|`seed`), `state` (`draft`\|`probed`\|`published`\|`retired`), `probe_result_json`, `times_used`, `last_used_at`, `first_try_pass_count`, `avg_solve_seconds`, `generator_meta_json` (`provider`, `model`, `generation_request_id`), `created_at`, `retired_reason` | O banco. Envelope **imutável após publicado** (correção = nova linha `supersedes_question_id`). |
-| `session_items` | `id`, `session_id`, `bank_question_id`, `order_index`, `state` (`pending`\|`active`\|`passed`\|`skipped`), `started_at`, `passed_at`, `attempts` | Substitui a antiga `scenarios`: a sessão só referencia questões do banco. |
-| `generation_requests` | `id`, `request_json`, `status`, `scenarios_attempted`, `scenarios_published`, `created_at` | Auditoria do pipeline (o que foi pedido × o que sobreviveu aos gates). |
-| `llm_generations` | *(já existe)* | Uma linha por chamada LLM (estágio, provider, tentativa, raw). |
+| `bank_questions` | `id`, `envelope_json`, `envelope_hash`, `domain`, `subtopics_json`, `difficulty`, `weight_pct`, `estimated_minutes`, `source` (`llm`\|`seed`), `state` (`draft`\|`probed`\|`published`\|`retired`), `probe_result_json`, `times_used`, `last_used_at`, `first_try_pass_count`, `avg_solve_seconds`, `generator_meta_json` (`provider`, `model`, `generation_request_id`), `created_at`, `retired_reason` | The bank. Envelope **immutable after published** (a fix = new row with `supersedes_question_id`). |
+| `session_items` | `id`, `session_id`, `bank_question_id`, `order_index`, `state` (`pending`\|`active`\|`passed`\|`skipped`), `started_at`, `passed_at`, `attempts` | Replaces the old `scenarios`: the session only references bank questions. |
+| `generation_requests` | `id`, `request_json`, `status`, `scenarios_attempted`, `scenarios_published`, `created_at` | Pipeline audit (what was requested × what survived the gates). |
+| `llm_generations` | *(already exists)* | One row per LLM call (stage, provider, attempt, raw). |
 
-- **Dedup semântico:** fingerprint = hash normalizado de `(domain, subtopics ordenados, título lowercase sem acento, hash dos manifests do setup)`. Colisão com questão `published` → descarta a nova (evita o banco enchendo de clones).
-- **Ciclo de vida do estado:** `draft` (saiu do pipeline sem passar em E, ou revisão manual pendente) → `probed` (passou em E; publicado automaticamente se `auto_publish`, default **on**) → `published` → `retired` (bug descoberto em uso, via botão "Reportar problema na questão" — entra `retired_reason` e sai da amostragem).
-- **Métricas por questão** alimentam o dashboard: `first_try_pass_count/times_used`, `avg_solve_seconds` vs `estimated_minutes` (detecta questões mal calibradas em tempo).
-- **Enxoval mínimo recomendado:** ≥3 questões `published` por célula domínio×dificuldade (grade 5×3); o Studio mostra a grade de cobertura e sugere gerar onde estiver vazio.
+- **Semantic dedup:** fingerprint = normalized hash of `(domain, sorted subtopics, lowercase accent-free title, hash of the setup manifests)`. Collision with a `published` question → discards the new one (keeps the bank from filling with clones).
+- **State lifecycle:** `draft` (came out of the pipeline without passing E, or pending manual review) → `probed` (passed E; published automatically if `auto_publish`, default **on**) → `published` → `retired` (bug discovered in use, via the "Report a problem with the question" button — `retired_reason` is entered and it leaves sampling).
+- **Per-question metrics** feed the dashboard: `first_try_pass_count/times_used`, `avg_solve_seconds` vs `estimated_minutes` (detects poorly time-calibrated questions).
+- **Recommended minimum stock:** ≥3 `published` questions per domain×difficulty cell (5×3 grid); the Studio shows the coverage grid and suggests generating where it's empty.
 
 ---
 
-## 4. Sorteio por Percentuais da Prova (amostragem)
+## 4. Exam-Percentage Draw (sampling)
 
-### 4.1 Algoritmo (`bank.py · draw_exam_sample`)
+### 4.1 Algorithm (`bank.py · draw_exam_sample`)
 
-1. **Pesos oficiais CNCF:** Troubleshooting 30 · Cluster Architecture 25 · Services & Networking 20 · Workloads & Scheduling 15 · Storage 10.
-2. **Renormalização por filtro:** se o usuário restringir domínios (ex.: só Troubleshooting + Storage) ou dificuldade, os pesos renormalizam sobre o subconjunto elegível do banco.
-3. **Alocação inteira por largest remainder:** `raw_i = N · w_i / Σw`; `floor` em todos; distribui as vagas restantes pelos maiores restos (tie-break: peso maior).
-4. **Seleção dentro da célula:** elegível = `published` ∧ não usada na sessão atual ∧ dificuldade compatível; ordena por `(times_used ASC, random())` — favorece questões menos usadas sem ser determinístico.
-5. **Fallback de célula vazia:** completa proporcionalmente das outras células, sinaliza na UI (*"Storage: sem questões Killer.sh Hardcore no banco — completado com Cluster Architecture"*) e oferece CTA "Gerar mais deste domínio".
+1. **Official CNCF weights:** Troubleshooting 30 · Cluster Architecture 25 · Services & Networking 20 · Workloads & Scheduling 15 · Storage 10.
+2. **Renormalization by filter:** if the user restricts domains (e.g. only Troubleshooting + Storage) or difficulty, the weights renormalize over the bank's eligible subset.
+3. **Integer allocation by largest remainder:** `raw_i = N · w_i / Σw`; `floor` on all; distributes the remaining slots by the largest remainders (tie-break: higher weight).
+4. **Selection within the cell:** eligible = `published` ∧ not used in the current session ∧ compatible difficulty; sorts by `(times_used ASC, random())` — favors less-used questions without being deterministic.
+5. **Empty-cell fallback:** completes proportionally from other cells, flags it in the UI (*"Storage: no Killer.sh Hardcore questions in the bank — completed with Cluster Architecture"*) and offers a "Generate more of this domain" CTA.
 
-### 4.2 Exemplos Numéricos (prova completa, 5 domínios)
+### 4.2 Numeric Examples (full exam, 5 domains)
 
-| N | Raw (T/CA/SN/WS/ST) | Alocação final |
+| N | Raw (T/CA/SN/WS/ST) | Final allocation |
 | :--- | :--- | :--- |
-| 15 (simulado) | 4.5 / 3.75 / 3.0 / 2.25 / 1.5 | **5 / 4 / 3 / 2 / 1** |
-| 5 (bateria) | 1.5 / 1.25 / 1.0 / 0.75 / 0.5 | **2 / 1 / 1 / 1 / 0** |
-| 3 (rápida) | 0.9 / 0.75 / 0.6 / 0.45 / 0.3 | **1 / 1 / 1 / 0 / 0** |
+| 15 (mock exam) | 4.5 / 3.75 / 3.0 / 2.25 / 1.5 | **5 / 4 / 3 / 2 / 1** |
+| 5 (battery) | 1.5 / 1.25 / 1.0 / 0.75 / 0.5 | **2 / 1 / 1 / 1 / 0** |
+| 3 (quick) | 0.9 / 0.75 / 0.6 / 0.45 / 0.3 | **1 / 1 / 1 / 0 / 0** |
 
-### 4.3 Fluxo de UI "Practice"
+### 4.3 "Practice" UI Flow
 
-`[Practice]` → modal: quantidade (`3 · 5 · 15 · custom`), filtros opcionais (domínios, dificuldade — default: todos, pesos completos) → **preview da distribuição antes de iniciar** (*"You will get: 5× Troubleshooting · 4× Cluster Architecture · …"*, com badge de fallback quando houver) → `[Start Session]` → sorteio, `session_items` criados, Q1 aplicada no cluster, tela de questão ao lado do terminal (fluxo do `UX_UI_SPEC.md` já especificado).
+`[Practice]` → modal: quantity (`3 · 5 · 15 · custom`), optional filters (domains, difficulty — default: all, full weights) → **distribution preview before starting** (*"You will get: 5× Troubleshooting · 4× Cluster Architecture · …"*, with a fallback badge when present) → `[Start Session]` → draw, `session_items` created, Q1 applied to the cluster, question screen beside the terminal (flow already specified in `UX_UI_SPEC.md`).
 
 ---
 
-## 5. Contrato Formal de Avaliação (Check) — Correto / Incorreto sem Ambiguidade
+## 5. Formal Evaluation Contract (Check) — Pass / Fail without Ambiguity
 
-> Princípio inalterado e reforçado: **a LLM nunca avalia**. O Check é 100% determinístico, por estado resultante. Esta seção formaliza a semântica que faltava (status, retry, veredito, evidência).
+> Unchanged and reinforced principle: **the LLM never evaluates**. The Check is 100% deterministic, on resulting state. This section formalizes the semantics that were missing (status, retry, verdict, evidence).
 
-### 5.1 Ciclo de vida de um check individual
+### 5.1 Lifecycle of an individual check
 
-| Status | Significado | Conta para o veredito? | Retry? |
+| Status | Meaning | Counts toward the verdict? | Retry? |
 | :--- | :--- | :--- | :--- |
-| `PASS` | Predicado verdadeiro no cluster | sim (a favor) | — |
-| `FAIL` | Predicado falso — **estado do usuário**, não infra | sim (contra) | **Nunca** re-executa sozinho (o estado não muda sem o usuário agir) |
-| `SKIP` | Pré-condição não satisfeita (ex.: recurso pai ausente) com `reason` | contra (exibido como "não avaliável — resolva o item anterior") | re-avaliado no próximo Check |
-| `ERROR` | Falha de infra (apiserver unreachable, SSH down, timeout de execução) | **não** — a rodada é inválida | 2× com backoff 1s; persistindo → rodada inteira marcada `infra_error` |
+| `PASS` | Predicate true on the cluster | yes (in favor) | — |
+| `FAIL` | Predicate false — **user state**, not infra | yes (against) | **Never** re-runs by itself (the state doesn't change without the user acting) |
+| `SKIP` | Unmet precondition (e.g. missing parent resource) with `reason` | against (shown as "not evaluable — resolve the previous item") | re-evaluated on the next Check |
+| `ERROR` | Infra failure (apiserver unreachable, SSH down, execution timeout) | **no** — the round is invalid | 2× with 1s backoff; persisting → whole round marked `infra_error` |
 
-- **Timeout por check:** 10s default (`pod_exec_*`: 45s; `helm_release_state`: 20s); `node_command_*`: 15s. Timeout vira `ERROR`, nunca `FAIL`.
-- **Provas negativas** (`pod_exec_must_fail`): obrigatoriamente embutem o próprio limite no comando (ex.: `curl --max-time 5`, `nc -w 3`, `timeout 5 wget …`) — a spec do Construtor rejeita `must_fail` sem timeout embutido (gate D).
-- **Read-only:** checks não mutam workloads do usuário; sondas efêmeras (`ephemeral_probe`) rodam com label `cka-arena.io/probe: "true"` e TTL de limpeza de 120s.
+- **Per-check timeout:** 10s default (`pod_exec_*`: 45s; `helm_release_state`: 20s); `node_command_*`: 15s. A timeout becomes `ERROR`, never `FAIL`.
+- **Negative checks** (`pod_exec_must_fail`): must embed their own limit in the command (e.g. `curl --max-time 5`, `nc -w 3`, `timeout 5 wget …`) — the Builder spec rejects `must_fail` without an embedded timeout (gate D).
+- **Read-only:** checks don't mutate user workloads; ephemeral probes (`ephemeral_probe`) run with label `cka-arena.io/probe: "true"` and a 120s cleanup TTL.
 
-### 5.2 Veredito da questão (all-or-nothing, como na CKA real)
+### 5.2 Question verdict (all-or-nothing, like the real CKA)
 
-- `PASS` ⇔ **100% dos checks `PASS`** (`SKIP` e `FAIL` bloqueiam; `ERROR` persistente invalida a rodada sem consumir tentativa).
-- Feedback **itemizado** estilo KodeKloud no drawer: cada check com status + **evidência** (`expected`, `actual`, comando/jsonpath executado) + `failure_hint` com **revelação progressiva**: hint aparece a partir da 2ª rodada de FAIL do mesmo check (1ª rodada mostra só a evidência — força diagnóstico antes da dica).
-- Cada rodada gravada em `check_runs` (duração, resultados) — base do dashboard por domínio.
+- `PASS` ⇔ **100% of the checks `PASS`** (`SKIP` and `FAIL` block; persistent `ERROR` invalidates the round without consuming an attempt).
+- **Itemized** KodeKloud-style feedback in the drawer: each check with status + **evidence** (`expected`, `actual`, executed command/jsonpath) + `failure_hint` with **progressive reveal**: the hint appears from the 2nd FAIL round of the same check (1st round shows only the evidence — forces diagnosis before the hint).
+- Each round recorded in `check_runs` (duration, results) — the basis of the per-domain dashboard.
 
-### 5.3 Execução e anti-flakiness
+### 5.3 Execution and anti-flakiness
 
-- **Settle antes da rodada:** pods alvo devem estar em estado estável (`Running`/`CrashLoopBackOff`/`ImagePullBackOff`) ou 60s de teto — evita FAIL transiente por scheduling/pull.
-- **Grupos com paralelismo interno:** G1 leituras de API (`kubectl_resource_exists`, `kubectl_jsonpath`, `kubectl_auth_can_i`, `helm_release_state`) em paralelo; G2 pods (`pod_status_ready`, `pod_exec_*`) em paralelo; G3 SSH/host (`node_command_exit_zero`, `host_file_contains`) paralelo. Grupos sequenciais (barato → caro).
-- **Determinismo:** mesma resposta para o mesmo estado do cluster; nenhuma aleatoriedade fora do `random()` nunca usado no caminho de check.
+- **Settle before the round:** target pods must be in a stable state (`Running`/`CrashLoopBackOff`/`ImagePullBackOff`) or 60s ceiling — avoids transient FAIL from scheduling/pull.
+- **Groups with internal parallelism:** G1 API reads (`kubectl_resource_exists`, `kubectl_jsonpath`, `kubectl_auth_can_i`, `helm_release_state`) in parallel; G2 pods (`pod_status_ready`, `pod_exec_*`) in parallel; G3 SSH/host (`node_command_exit_zero`, `host_file_contains`) parallel. Sequential groups (cheap → expensive).
+- **Determinism:** same answer for the same cluster state; no randomness outside the `random()` never used in the check path.
 
 ---
 
-## 6. Fim de Sessão: Teardown e Reset Limpo do Cluster
+## 6. End of Session: Teardown and Clean Cluster Reset
 
-> Requisito do usuário: *"quando a sessão de prática for finalizada, o cluster deve ser zerado e reiniciado limpo"*. Três níveis, com política clara de quando cada um roda.
+> User requirement: *"when the practice session is finished, the cluster must be wiped and restarted clean"*. Three levels, with a clear policy of when each runs.
 
-### 6.1 Níveis de limpeza (`teardown.py`)
+### 6.1 Cleanup levels (`teardown.py`)
 
-| Nível | Quando | O quê faz | Duração típica | Garantia |
+| Level | When | What it does | Typical duration | Guarantee |
 | :--- | :--- | :--- | :--- | :--- |
-| **L0 — por questão** | automático, ao clicar `Next`/`Pular` | cleanup da questão atual (namespaces do cenário, recursos com label, backups de nó restaurados, helm releases do cenário, probes) | 2–10s | questão seguinte começa sem herança da anterior |
-| **L1 — fim de sessão (default)** | automático ao finalizar/abortar sessão | L0 da última questão + varredura global: remove **tudo** com label `cka-arena.io/managed: "true"` (namespaces, probes, releases Helm, ConfigMaps de prova) + restaura backups de nó pendentes + **drift check** (compara arquivos de nós vs baseline) | ~30s | cluster funcionalmente limpo para a próxima sessão |
-| **L2 — clean reset** | sob demanda ou automático pós-simulado | L1 + restauração do baseline de arquivos dos nós + `restart containerd/kubelet` + wait Ready + drift check | ~1–2 min | cluster funcionalmente limpo; **addons preservados** (sem snapshots de VM — backend Multipass/macOS não os implementa) |
+| **L0 — per question** | automatic, on clicking `Next`/`Skip` | cleanup of the current question (scenario namespaces, labeled resources, restored node backups, scenario helm releases, probes) | 2–10s | next question starts with no inheritance from the previous one |
+| **L1 — end of session (default)** | automatic at session finish/abort | L0 of the last question + global sweep: removes **everything** labeled `cka-arena.io/managed: "true"` (namespaces, probes, Helm releases, probe ConfigMaps) + restores pending node backups + **drift check** (compares node files vs baseline) | ~30s | functionally clean cluster for the next session |
+| **L2 — clean reset** | on demand or automatic post-mock exam | L1 + restoration of the node file baseline + `restart containerd/kubelet` + wait Ready + drift check | ~1–2 min | functionally clean cluster; **addons preserved** (no VM snapshots — the Multipass/macOS backend doesn't implement them) |
 
-### 6.2 L2 clean reset (snapshots de VM indisponíveis no ambiente)
+### 6.2 L2 clean reset (VM snapshots unavailable in the environment)
 
-- **Descoberta ao vivo (Fase 5):** o CLI do Multipass 1.17.0 lista snapshot/restore, mas o backend do macOS (QEMU) responde `The snapshots feature is not implemented on this backend` — **snapshots de VM não são viáveis aqui**. O L2 foi redefinido como **clean reset** determinístico, sem depender de snapshots.
-- **Composição do clean reset:** (1) L1 completo (namespaces/recursos com label gerenciado, probes, PVs; restauração de backups pendentes); (2) em cada nó, restauração de `/etc/kubernetes/manifests`, kubelet config, containerd config e drop-ins a partir do baseline; (3) `systemctl restart containerd` + `kubelet`; (4) espera `/readyz` e 3/3 nós Ready; (5) drift check e remoção de taints de prática. Addons em namespaces não gerenciados permanecem.
-- **Manutenção do baseline de arquivos:** após upgrades intencionais do cluster, o ClusterDoctor pode recapturar o baseline de arquivos (`ensure_baseline_files` com diretório limpo). Validado ao vivo: `drift=false`, 3/3 Ready e addons presentes após o L2.
-- **L2 automático:** após sessões `mock_exam` (simulado completo) — fidelidade máxima para a próxima; após sessões `study`, L1 basta (mais rápido) e a tela final oferece L2 como opção.
+- **Live discovery (Phase 5):** the Multipass 1.17.0 CLI lists snapshot/restore, but the macOS backend (QEMU) answers `The snapshots feature is not implemented on this backend` — **VM snapshots are not viable here**. L2 was redefined as a deterministic **clean reset**, without depending on snapshots.
+- **Clean reset composition:** (1) full L1 (labeled namespaces/resources, probes, PVs; restoration of pending backups); (2) on each node, restoration of `/etc/kubernetes/manifests`, kubelet config, containerd config and drop-ins from the baseline; (3) `systemctl restart containerd` + `kubelet`; (4) wait for `/readyz` and 3/3 nodes Ready; (5) drift check and removal of practice taints. Addons in unmanaged namespaces remain.
+- **File baseline maintenance:** after intentional cluster upgrades, the ClusterDoctor can recapture the file baseline (`ensure_baseline_files` with a clean directory). Verified live: `drift=false`, 3/3 Ready and addons present after L2.
+- **Automatic L2:** after `mock_exam` sessions (full mock exam) — maximum fidelity for the next one; after `study` sessions, L1 suffices (faster) and the final screen offers L2 as an option.
 
-### 6.3 Tela de Fim de Sessão (UX)
+### 6.3 End-of-Session Screen (UX)
 
 ```
 ┌──────────────────────────────────────────────────────┐
@@ -248,17 +248,17 @@ No design anterior, `scenarios` pertencia a `sessions` (a fila gerada era a sess
 └──────────────────────────────────────────────────────┘
 ```
 
-- Se o drift check do L1 detectar divergência vs baseline (arquivo de nó alterado, namespace órfão), a UI **recomenda L2** explicitamente.
-- Fim de sessão **abortada** (bug no meio de um Boss Fight) → mesma tela; L2 recomendado por padrão.
+- If the L1 drift check detects divergence vs the baseline (node file changed, orphan namespace), the UI **recommends L2** explicitly.
+- End of an **aborted** session (bug in the middle of a Boss Fight) → same screen; L2 recommended by default.
 
 ---
 
-## 7. Alterações que Este Design Propaga
+## 7. Changes This Design Propagates
 
-| Documento | Alteração |
+| Document | Change |
 | :--- | :--- |
-| `LLM_SCENARIO_SPEC.md` | Novo bloco `solution` no envelope; regra 10 do prompt (solução automatizável); seção "Contrato de Avaliação" aponta para §5 daqui. |
-| `ARCHITECTURE.md` | §6: tabelas `bank_questions`/`session_items`/`generation_requests` (substituem `scenarios`); §11 Banco & Amostragem; §12 Teardown L0/L1/L2-clean; árvore ganha `pipeline.py`, `bank.py`, `teardown.py`. |
-| `UX_UI_SPEC.md` | §4 Studio publica no banco (grade de cobertura 5×3); seção "Practice from Bank" (modal + preview de distribuição); tela de fim de sessão (L1/L2). |
-| `PLAN.md` | Fase 3 vira "Pipeline multi-estágio + banco"; Fase 5 usa o banco; verificação ganha casos de amostragem e teardown. |
-| `GAP_ANALYSIS.md` | Segunda auditoria (G13–G18) com a matriz de rastreabilidade desta revisão. |
+| `LLM_SCENARIO_SPEC.md` | New `solution` block in the envelope; prompt rule 10 (automatable solution); "Evaluation Contract" section points to §5 here. |
+| `ARCHITECTURE.md` | §6: `bank_questions`/`session_items`/`generation_requests` tables (replace `scenarios`); §11 Bank & Sampling; §12 Teardown L0/L1/L2-clean; tree gains `pipeline.py`, `bank.py`, `teardown.py`. |
+| `UX_UI_SPEC.md` | §4 Studio publishes to the bank (5×3 coverage grid); "Practice from Bank" section (modal + distribution preview); end-of-session screen (L1/L2). |
+| `PLAN.md` | Phase 3 becomes "Multi-stage pipeline + bank"; Phase 5 uses the bank; verification gains sampling and teardown cases. |
+| `GAP_ANALYSIS.md` | Second audit (G13–G18) with this revision's traceability matrix. |

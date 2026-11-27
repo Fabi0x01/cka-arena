@@ -1,72 +1,74 @@
-# Prontidão para Implementação — Veredito da Auditoria Final
+# Implementation Readiness — Final Audit Verdict
 
-> **Registro histórico (17/11/2026) — congelado.** Gate de autorização anterior à implementação; todas as fases foram implementadas depois. Mantido como registro das decisões D1–D4 e dos riscos aceitos. Estado atual: `README.md` e `ARCHITECTURE.md`.
+> **Historical record (2026-11-17) — frozen.** Pre-implementation authorization gate; all phases were implemented afterwards. Kept as a record of the D1–D4 decisions and accepted risks. Current state: `README.md` and `ARCHITECTURE.md`.
+>
+> Translated from the original pt-BR.
 
-> Auditoria de coerência ponta a ponta da documentação (10 arquivos, 3 revisões) antes da autorização de implementação. Data: 2026-11-17.
+> End-to-end coherence audit of the documentation (10 files, 3 revisions) before implementation authorization. Date: 2026-11-17.
 
 ---
 
-## Veredito: ✅ PRONTO COM CONDIÇÕES
+## Verdict: ✅ READY WITH CONDITIONS
 
-A especificação cobre **todas as 5 fases do roadmap** com contratos verificáveis (schema, endpoints, machine states, rubricas, design system). Nada bloqueia o início da **Fase 1**. **4 decisões** do dono são recomendadas antes de codificar as fases 3–5 (nenhuma bloqueia Fase 1–2).
+The specification covers **all 5 roadmap phases** with verifiable contracts (schema, endpoints, machine states, rubrics, design system). Nothing blocks the start of **Phase 1**. **4 owner decisions** are recommended before coding phases 3–5 (none blocks Phases 1–2).
 
-### Correções aplicadas por esta auditoria (gaps mecânicos fechados)
+### Fixes applied by this audit (mechanical gaps closed)
 
-| Achado | Correção |
+| Finding | Fix |
 | :--- | :--- |
-| Labels de gerenciamento inconsistentes (`cka-arena/scenario-id` × `cka-arena.io/managed`) | Política única em `ARCHITECTURE.md` §4.3: `cka-arena.io/managed="true"` (sweep L1) + `cka-arena.io/scenario="<id>"` (cleanup L0) + `cka-arena.io/probe="true"` (sondas, TTL 120s) |
-| API sem referência consolidada; `/api/generate` sem contrato; `{tab}`×`{tab_id}` | Nova `ARCHITECTURE.md` §13 — tabela completa de 13 endpoints + regras transversais (`202 {job_id}`, envelope de erro, endpoints de sessão check/next/skip/reset) |
-| Sobreposição `llm_generator.py` × `pipeline.py` na árvore | Fundidos: `pipeline.py` absorve o prompt builder e o loop de auto-reparo |
-| Varredura de consistência | Zero restos de revisões antigas (dual-window, pt-BR de UI, `scenarios` table, `prompt_pt_br`); fences, JSON do envelope, SVG e links internos validados |
+| Inconsistent management labels (`cka-arena/scenario-id` vs `cka-arena.io/managed`) | Single policy in `ARCHITECTURE.md` §4.3: `cka-arena.io/managed="true"` (L1 sweep) + `cka-arena.io/scenario="<id>"` (L0 cleanup) + `cka-arena.io/probe="true"` (probes, TTL 120s) |
+| API without a consolidated reference; `/api/generate` without a contract; `{tab}` vs `{tab_id}` | New `ARCHITECTURE.md` §13 — complete table of 13 endpoints + cross-cutting rules (`202 {job_id}`, error envelope, session check/next/skip/reset endpoints) |
+| Overlap between `llm_generator.py` and `pipeline.py` in the tree | Merged: `pipeline.py` absorbs the prompt builder and the self-repair loop |
+| Consistency sweep | Zero leftovers from older revisions (dual-window, pt-BR UI, `scenarios` table, `prompt_pt_br`); fences, envelope JSON, SVG and internal links validated |
 
 ---
 
-## Matriz de Cobertura por Fase (o que já está especificado, e onde)
+## Coverage Matrix by Phase (what is already specified, and where)
 
-| Fase | Contrato de saída | Especificação | Lacunas |
+| Phase | Output contract | Specification | Gaps |
 | :--- | :--- | :--- | :--- |
-| **1. Fundação + Power Manager + Doctor + SSH Bridge** | `pyproject`, setup_ssh_bridge (expect + kubeconfig dedicado), máquina de estados, boot 7 passos, baseline de arquivos dos nós | `ARCHITECTURE.md` §3, §9, §13 · `PLAN.md` Fase 1 | nenhuma |
-| **2. ScenarioEngine + Teardown** | setup/check/cleanup, 10 check types, contrato PASS/FAIL/SKIP/ERROR, L0/L1/L2 | `LLM_SCENARIO_SPEC.md` §2 · `LLM_PIPELINE_SPEC.md` §5–§6 · `ARCHITECTURE.md` §12 | nenhuma |
-| **3. Pipeline A→E + Banco** | envelope v1.1 (inglês, formato killer.sh, `solution`), estágios A–E, prove-out + Solvability Probe, rubrica de dificuldade §5, `draw_exam_sample` | `LLM_SCENARIO_SPEC.md` §1, §1.2, §4, §5 · `LLM_PIPELINE_SPEC.md` §1–§4 · `ARCHITECTURE.md` §11 | nenhuma **para o design**; exige decisão D1 (provider default) e D2 (cenários destrutivos) |
-| **4. UI Integrada + Liquid Glass** | shell único, tokens, 3 materiais de vidro, componentes, motion, piso de performance, wireframes EN | `DESIGN.md` (com CSS pronto) · `UX_UI_SPEC.md` §1–§6 · `design/mockup-workspace.svg` | nenhuma |
-| **5. Seeds + Telemetria** | 15 seeds publicados via gates A–E, grade de cobertura, dashboard | `PLAN.md` Fase 5 · `ARCHITECTURE.md` §7, §11 | esforço de autoria (não design); ver D4 |
+| **1. Foundation + Power Manager + Doctor + SSH Bridge** | `pyproject`, setup_ssh_bridge (expect + dedicated kubeconfig), machine states, 7-step boot, node file baseline | `ARCHITECTURE.md` §3, §9, §13 · `PLAN.md` Phase 1 | none |
+| **2. ScenarioEngine + Teardown** | setup/check/cleanup, 10 check types, PASS/FAIL/SKIP/ERROR contract, L0/L1/L2 | `LLM_SCENARIO_SPEC.md` §2 · `LLM_PIPELINE_SPEC.md` §5–§6 · `ARCHITECTURE.md` §12 | none |
+| **3. Pipeline A→E + Question Bank** | envelope v1.1 (English, killer.sh format, `solution`), stages A–E, prove-out + Solvability Probe, difficulty rubric §5, `draw_exam_sample` | `LLM_SCENARIO_SPEC.md` §1, §1.2, §4, §5 · `LLM_PIPELINE_SPEC.md` §1–§4 · `ARCHITECTURE.md` §11 | none **for the design**; requires decisions D1 (default provider) and D2 (destructive scenarios) |
+| **4. Integrated UI + Liquid Glass** | single shell, tokens, 3 glass materials, components, motion, performance floor, EN wireframes | `DESIGN.md` (with ready CSS) · `UX_UI_SPEC.md` §1–§6 · `design/mockup-workspace.svg` | none |
+| **5. Seeds + Telemetry** | 15 seeds published via gates A–E, coverage grid, dashboard | `PLAN.md` Phase 5 · `ARCHITECTURE.md` §7, §11 | authoring effort (not design); see D4 |
 
 ---
 
-## Decisões do Dono (D1–D4) — **TODAS FECHADAS em 17/11/2026** ✅
+## Owner Decisions (D1–D4) — **ALL CLOSED on 2026-11-17** ✅
 
-### D1 — Provider LLM principal e origem da chave ✅ **DECIDIDO**
-Catálogo suportado: GLM Coding Plan (Z.AI), OpenCode Go, DeepSeek, Anthropic, OpenAI-compatible/Ollama.
-**Decisão:** GLM Coding Plan (`glm-5.3` principal / `glm-5.3-flash` para Normalizador+Revisor) com **DeepSeek como fallback** — mesmo padrão multi-provider já validado localmente. A configuração é feita **pela UI (Settings → AI provider)** e persistida em `llm_config.json` local (git-ignored); a chave nunca entra no repositório.
+### D1 — Primary LLM provider and key origin ✅ **DECIDED**
+Supported catalog: GLM Coding Plan (Z.AI), OpenCode Go, DeepSeek, Anthropic, OpenAI-compatible/Ollama.
+**Decision:** GLM Coding Plan (`glm-5.3` primary / `glm-5.3-flash` for Normalizer+Reviewer) with **DeepSeek as fallback** — same multi-provider pattern already validated locally. Configuration is done **through the UI (Settings → AI provider)** and persisted in a local `llm_config.json` (git-ignored); the key never enters the repository.
 
-### D2 — Política de cenários destrutivos ✅ **DECIDIDO (recomendação aceita)**
-O currículo CKA inclui tarefas que alteram o estado global do cluster (ex.: `etcdctl snapshot restore` + reinício do apiserver). Durante a prática, isso deixa o cluster em estado não-limpo para a questão seguinte.
-**Decisão:** envelope ganha flag `destructive: true` (Gate D obriga a declarar — já propagado ao `LLM_SCENARIO_SPEC.md` §1.1/§3); questões destrutivas só entram em sessões `mock_exam`; ao concluí-las, a UI oferece L2 (clean reset) automaticamente antes do `Next`; os 15 seeds iniciais incluem apenas `etcd snapshot save` (não-restore), com variantes restore entrando depois via LLM e marcação `destructive`.
+### D2 — Destructive scenario policy ✅ **DECIDED (recommendation accepted)**
+The CKA curriculum includes tasks that change the global state of the cluster (e.g. `etcdctl snapshot restore` + apiserver restart). During practice, this leaves the cluster in a non-clean state for the next question.
+**Decision:** the envelope gains a `destructive: true` flag (Gate D forces declaring it — already propagated to `LLM_SCENARIO_SPEC.md` §1.1/§3); destructive questions only enter `mock_exam` sessions; upon completing them, the UI offers L2 (clean reset) automatically before `Next`; the 15 initial seeds include only `etcd snapshot save` (no restore), with restore variants entering later via the LLM and the `destructive` flag.
 
-### D3 — Defaults das flags de comportamento ✅ **DECIDIDO (recomendação aceita)** *(aplicáveis já na Fase 1)*
-| Flag | Recomendação | Racional |
+### D3 — Behavior flag defaults ✅ **DECIDED (recommendation accepted)** *(applicable from Phase 1 on)*
+| Flag | Recommendation | Rationale |
 | :--- | :--- | :--- |
-| `auto_start_on_launch` | **ON** | requisito original: "cluster inicializado junto com a aplicação" |
-| `auto_publish` (banco) | **ON** | questões que passaram nos gates A–E já são confiáveis; `draft` continua existindo para reprovadas |
-| `command_audit` | **OFF** | privacidade por default; ligar quando quiser telemetria de abordagem |
-| `CKA_ARENA_TOKEN` | indefinido | local-only; definir só se expor na rede da casa |
+| `auto_start_on_launch` | **ON** | original requirement: "cluster initialized along with the application" |
+| `auto_publish` (question bank) | **ON** | questions that passed gates A–E are already trustworthy; `draft` continues to exist for rejected ones |
+| `command_audit` | **OFF** | privacy by default; turn on when approach telemetry is wanted |
+| `CKA_ARENA_TOKEN` | undefined | local-only; set only if exposing on the home network |
 
-### D4 — Ordem interna da Fase 5 ✅ **DECIDIDO (recomendação aceita)**
-**Decisão:** **3 seeds exemplares** (Troubleshooting, Cluster Architecture, Services & Networking) entram no fim da **Fase 2** — validam o engine (setup→check→cleanup) antes de existir LLM; os **12 restantes** seguem na Fase 5, publicados pelos mesmos gates A–E (já refletido no `PLAN.md` Fases 2/5).
+### D4 — Internal ordering of Phase 5 ✅ **DECIDED (recommendation accepted)**
+**Decision:** **3 exemplary seeds** (Troubleshooting, Cluster Architecture, Services & Networking) enter at the end of **Phase 2** — they validate the engine (setup→check→cleanup) before the LLM exists; the **remaining 12** follow in Phase 5, published by the same gates A–E (already reflected in `PLAN.md` Phases 2/5).
 
 ---
 
-## Checklist de Autorização
+## Authorization Checklist
 
-- [x] D1 confirmada (provider + origem da chave) — GLM + DeepSeek fallback
-- [x] D2 confirmada (política destrutiva) — flag `destructive` + L2 antes do `Next`
-- [x] D3 confirmada — defaults aceitos (`auto_start_on_launch` ON · `auto_publish` ON · `command_audit` OFF · sem token)
-- [x] D4 confirmada — 3 seeds na Fase 2, 12 na Fase 5
-- [x] **Projeto autorizado a implementar** — todas as decisões fechadas; iniciar pela Fase 1
+- [x] D1 confirmed (provider + key origin) — GLM + DeepSeek fallback
+- [x] D2 confirmed (destructive policy) — `destructive` flag + L2 before `Next`
+- [x] D3 confirmed — defaults accepted (`auto_start_on_launch` ON · `auto_publish` ON · `command_audit` OFF · no token)
+- [x] D4 confirmed — 3 seeds in Phase 2, 12 in Phase 5
+- [x] **Project authorized for implementation** — all decisions closed; start with Phase 1
 
-## Riscos conhecidos e aceitos (não requerem decisão agora)
+## Known and accepted risks (no decision required now)
 
-1. **DHCP pode mudar os IPs Bridged** — mitigação já especificada (self-heal de kubeconfig + regen do ssh-config a cada boot, `ARCHITECTURE.md` §9.3).
-2. **Refração `feDisplacementMap` é Chrome-only** — progressive enhancement; o visual não depende dela (`DESIGN.md` §4).
-3. **Snapshots de VM não são suportados no backend Multipass/macOS** (verificado ao vivo: `The snapshots feature is not implemented on this backend`) — o L2 foi redefinido como **clean reset** (baseline de arquivos + restart de agentes), validado com `drift=false` e addons preservados.
-4. **Custo de geração LLM** — Normalizador/Revisor em modelo flash e 1 chamada por cenário no Construtor; reprovadas ≤ 2 retries (`LLM_PIPELINE_SPEC.md` §2).
+1. **DHCP may change the Bridged IPs** — mitigation already specified (kubeconfig self-heal + ssh-config regeneration on every boot, `ARCHITECTURE.md` §9.3).
+2. **`feDisplacementMap` refraction is Chrome-only** — progressive enhancement; the visual does not depend on it (`DESIGN.md` §4).
+3. **VM snapshots are not supported on the Multipass/macOS backend** (verified live: `The snapshots feature is not implemented on this backend`) — L2 was redefined as a **clean reset** (file baseline + agent restart), validated with `drift=false` and addons preserved.
+4. **LLM generation cost** — Normalizer/Reviewer on a flash model and 1 call per scenario in the Builder; rejected ones ≤ 2 retries (`LLM_PIPELINE_SPEC.md` §2).
