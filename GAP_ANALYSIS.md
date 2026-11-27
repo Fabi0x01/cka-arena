@@ -1,5 +1,7 @@
 # Análise de Gaps & Melhorias — CKA Arena
 
+> **Registro histórico (auditoria de 17/11/2026, três revisões) — congelado.** Diagnóstico que originou as especificações atuais; não é atualizado e não descreve o estado atual do código (a UI, os endpoints e o terminal mudaram depois disto). Estado atual: `README.md`, `ARCHITECTURE.md` e os specs `LLM_*`. Identificadores do ambiente privado do autor foram genéricizados.
+
 > Auditoria da documentação existente (`PLAN.md`, `ARCHITECTURE.md`, `LLM_SCENARIO_SPEC.md`, `UX_UI_SPEC.md`, `README.md`) contra o ambiente real e o novo requisito do usuário: **terminal no próprio browser** + **botão para ligar o cluster junto com a aplicação**.
 >
 > Data da auditoria: 2026-11-17 · Auditor: análise automatizada com verificação viva do ambiente.
@@ -12,9 +14,9 @@ Verificações executadas na máquina durante esta análise:
 
 | Verificação | Comando | Resultado |
 | :--- | :--- | :--- |
-| Estado das VMs | `multipass list` | `controlplane`, `node01`, `node02` — **Running**, IPs Bridged `192.168.1.123/124/125` + NAT `192.168.252.3-5` |
+| Estado das VMs | `multipass list` | `controlplane`, `node01`, `node02` — **Running**, com IPs na rede Bridged (subnet local) + IPs NAT do Multipass |
 | Saúde do cluster | `kubectl --context cka get nodes -o wide` | **3/3 Ready**, `v1.37.2`, `containerd://2.2.1`, kernel `5.15.0-203-generic (arm64)` |
-| Contexto kubectl | `kubectl config get-contexts` | Contexto `cka` é o **corrente**; também existem 3 contextos EAX (easydesk) no mesmo kubeconfig |
+| Contexto kubectl | `kubectl config get-contexts` | Contexto `cka` é o **corrente**; também existem outros contextos (de trabalho) no mesmo kubeconfig |
 | SSH nos nós (rede Bridged) | `nc -z -G 2 <ip> 22` | **OK nos 3 nós** (`PasswordAuthentication yes`, user/password `ubuntu`/`ubuntu` conforme `01-setup-hosts.sh`) |
 | Ferramentas no Mac | `which` | `kubectl`, `helm`, `etcdctl`, `multipass` **presentes** |
 | Ferramentas ausentes no Mac | `which` | `tmux` **ausente**, `ttyd`/`gotty`/`wetty` **ausentes** |
@@ -51,13 +53,13 @@ Verificações executadas na máquina durante esta análise:
 - **Correção aplicada:** novo componente **ClusterPowerManager** (`ARCHITECTURE.md` §9): máquina de estados `off → starting → ready → degraded`, endpoint `POST /api/cluster/power`, sequência de boot instrumentada (VMs → SSH 22 → ssh-config regen → `/readyz` → nós Ready → doctor rápido → baseline se ausente) com progresso via SSE. UI: pill de estado no header + CTA "Ligar Cluster" quando `off` (`UX_UI_SPEC.md` §3). Flag `auto_start_on_launch` opcional nas Configurações.
 
 ### 🔴 G3 — IPs Bridged são DHCP: kubeconfig e `~/.ssh/config` podem quebrar após reboot das VMs
-- **Evidência:** `deploy-virtual-machines.sh` usa `--bridged` (DHCP do roteador); `README.md`/`ARCHITECTURE.md` tratam `192.168.1.123–125` como fixos; o kubeconfig do contexto `cka` aponta para `https://192.168.1.123:6443` hardcoded.
+- **Evidência:** `deploy-virtual-machines.sh` usa `--bridged` (DHCP do roteador); `README.md`/`ARCHITECTURE.md` tratam os IPs do laboratório como fixos; o kubeconfig do contexto `cka` aponta para o IP do controlplane hardcoded.
 - **Impacto:** se o DHCP reatribuir IPs após `multipass stop/start`, **tudo** para de funcionar (kubectl, SSH, checks) sem diagnóstico óbvio. É o gap mais provável de virar incidente real.
 - **Correção aplicada:** no fim do boot, o PowerManager (a) lê IPs atuais via `multipass list --format json`, (b) **regenera o bloco gerenciado** `# >>> CKA-ARENA MANAGED >>>` do `~/.ssh/config`, e (c) faz **self-heal do kubeconfig**: se `kubectl --context cka get --raw /readyz` falhar mas SSH responder, baixa `/etc/kubernetes/admin.conf` do controlplane via SSH, reescreve `server: https://<ip-atual>:6443` e atualiza o contexto `cka` via `kubectl config set-cluster`. Detalhado em `ARCHITECTURE.md` §9.3.
 
 ### 🔴 G4 — Bootstrap da chave SSH: fluxo de primeira execução não especificado (e sem `sshpass`)
 - **Evidência:** `PLAN.md` Fase 1 menciona "solicitando/usando a senha padrão do lab `ubuntu` uma única vez", mas sem mecanismo; `sshpass` **não está instalado** no Mac (verificado).
-- **Correção aplicada:** **`SSH_ASKPASS` + `SSH_ASKPASS_REQUIRE=force`** (OpenSSH ≥ 8.4; host verificado em 10.5) para instalar a chave pública sem interação — sem `sshpass` e sem expect. Especificado em `ARCHITECTURE.md` §3 (item 5) e validado na implementação da Fase 1.
+- **Correção aplicada:** **`SSH_ASKPASS` + `SSH_ASKPASS_REQUIRE=force`** (OpenSSH ≥ 8.4) para instalar a chave pública sem interação — sem `sshpass` e sem expect. Especificado em `ARCHITECTURE.md` §3 (item 5) e validado na implementação da Fase 1.
 
 ### 🔴 G5 — Nenhum componente de terminal web especificado (backend nem frontend)
 - **Evidência:** `ARCHITECTURE.md` §5 (árvore de diretórios) não tem `terminal.py` nem assets xterm; dependências do `pyproject` não listam nada de WebSocket/PTY.
@@ -77,7 +79,7 @@ Verificações executadas na máquina durante esta análise:
 - **Correção proposta:** PowerManager detecta `multipass list` falhando e retorna estado `daemon_down` com instrução acionável (`sudo launchctl kickstart -k system/com.canonical.multipass`). Adicionado a `ARCHITECTURE.md` §9.
 
 ### 🟡 G8 — Segurança do WebSocket de terminal não especificada
-- **Evidência:** novo vetor de ataque: PTY de shell do host exposto via WS. Exposição remota via tailscale-serve é um uso real desta máquina.
+- **Evidência:** novo vetor de ataque: PTY de shell do host exposto via WS. A exposição remota (ex.: um túnel na frente da porta) é um uso previsto por quem acessa a própria máquina de fora.
 - **Correção aplicada:** terminal WS **somente em `127.0.0.1`**, validação de header `Origin` (same-origin), recusa explícita se o app estiver bindado fora de loopback sem auth, aviso permanente na tela de Configurações. `ARCHITECTURE.md` §10.
 
 ### 🟡 G9 — Telemetria atual não enxerga *como* o usuário resolveu
@@ -85,7 +87,7 @@ Verificações executadas na máquina durante esta análise:
 - **Correção proposta (opcional, opt-in):** com o terminal no browser, o backend pode manter ring buffer do PTY e extrair comandos (split em prompt) vinculados ao `scenario_id` ativo — tabela `command_audit`. **Privacidade:** local-only, opt-in nas Configurações, purge por sessão. `ARCHITECTURE.md` §6.
 
 ### 🟡 G10 — Colisão de portas e conflito de kubeconfig com outros projetos
-- **Evidência:** app planejado na `8765` (porta livre). Porém o `~/.kube/config` compartilhado contém **3 contextos EKS de trabalho** (verificado); qualquer operação `kubectl` do backend **deve** sempre passar `--context cka` explícito (nunca confiar no current-context, que o usuário troca durante o dia).
+- **Evidência:** app planejada na `8765` (porta livre). Porém o `~/.kube/config` compartilhado contém **outros contextos de trabalho** (verificado); qualquer operação `kubectl` do backend **deve** sempre passar `--context cka` explícito (nunca confiar no current-context, que o usuário troca durante o dia).
 - **Correção aplicada:** regra explícita em `ARCHITECTURE.md` §3 (wrapper `cluster.py` sempre injeta `--context`); backend usa kubeconfig dedicado `~/.cka-arena/kubeconfig` copiado do `admin.conf` no primeiro doctor (imune a trocas de current-context do usuário).
 
 ### 🟡 G11 — Cenários de `etcd` restore: `etcdctl` existe no Mac, mas restore tem de rodar no nó
@@ -111,7 +113,7 @@ Verificações executadas na máquina durante esta análise:
 | M7 | Audit opcional de comandos do terminal → telemetria de abordagem | **P2** | `ARCHITECTURE.md` §6, §8.5 |
 | M8 | Catálogo de providers (GLM/OpenCode/DeepSeek/Claude/OpenAI-compat) como base do `llm_client.py` | **P1** | `PLAN.md` Fase 3 |
 | M9 | Estado `daemon_down` do multipass com instrução de correção | **P1** | `ARCHITECTURE.md` §9 |
-| M10 | Importação do histórico do `cka-30-dias/learning-records` para recomendação do próximo domínio | **P2** | `PLAN.md` Fase 5 |
+| M10 | Importação de um histórico de estudo externo para recomendação do próximo domínio | **P2** | `PLAN.md` Fase 5 |
 | M11 | Gateway API / metrics-server / local-path: instalar via Cluster Doctor com detecção `weave-npc` | **P1** | `ARCHITECTURE.md` §7 |
 
 ---

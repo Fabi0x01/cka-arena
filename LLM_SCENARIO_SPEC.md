@@ -2,82 +2,107 @@
 
 A LLM no **CKA Arena** tem um papel estrito: **arquiteta e geradora de cenários de laboratório/exame**. Ela nunca entrega a resposta durante a resolução e sua saída passa por um pipeline rígido de parsing, guardrails de segurança, aplicação real no cluster e sanity check antes de chegar à tela de estudo. A orquestração multi-estágio (**A** Normalizador → **B** Construtor → **C** Revisor → **D** Gates → **E** Prove-out com Solvability Probe), o banco de questões, o sorteio por percentuais da prova e o contrato formal de avaliação (PASS/FAIL/SKIP/ERROR) estão especificados em [`LLM_PIPELINE_SPEC.md`](./LLM_PIPELINE_SPEC.md).
 
+> **Documento de referência.** O contrato vivo é o modelo Pydantic em `app/models.py` e os gates em `app/pipeline/gates.py`; o prompt real (em inglês) está em `app/pipeline/prompts.py`. Onde divergir, o código prevalece.
+
 ---
 
-## 1. Contrato JSON Estrito (`ScenarioEnvelope v1`)
+## 1. Contrato JSON Estrito (`ScenarioEnvelope v1.2`)
 
-A LLM deve retornar **exclusivamente um objeto JSON válido** seguindo exatamente este schema (validado via `Pydantic`):
+A LLM deve retornar **exclusivamente um objeto JSON válido** seguindo este schema (validado via `Pydantic` em `app/models.py`; os campos e tipos do modelo têm precedência sobre o exemplo). Exemplo abreviado — manifestos cortados com `...` — baseado no seed `scenarios/seed/sn-networkpolicy-dns.json`, que é a referência completa:
 
 ```json
 {
-  "schema_version": "1.0",
+  "schema_version": "1.2",
   "id": "scn-netpol-dns-01",
-  "title": "Isolamento de Backend preservando resolução DNS",
+  "title": "Allow Selected Traffic Through Default Deny",
   "domain": "Services & Networking",
-  "subtopics": ["NetworkPolicy", "CoreDNS", "Egress Rules"],
+  "subtopics": ["NetworkPolicy", "egress", "DNS", "default-deny"],
   "difficulty": "killer_hardcore",
-  "weight": 8,
-  "estimated_minutes": 7,
+  "weight": 7,
+  "estimated_minutes": 6,
   "context_command": "kubectl config use-context cka",
   "ssh_target": null,
-  "prompt": "A Deployment `web-api` in namespace `prod-checkout` is running only 1 of its 3 desired replicas.\n\nPerform the following tasks:\n1. Create a NetworkPolicy named `allow-api-to-db` in namespace `payments` that allows ingress only from pods labeled `app=frontend` on port `5432`.\n2. Ensure pods labeled `app=api` can still resolve internal DNS names (e.g. `postgres.payments.svc.cluster.local`).\n\nDo not modify the existing Deployments.",
-  "copy_tokens": [
-    "payments",
-    "frontend",
-    "api",
-    "postgres",
-    "allow-api-to-db",
-    "5432"
-  ],
+  "archetype_id": "sn-networkpolicy-dns",
+  "prompt": "Allow Selected Traffic Through Default Deny\nTask weight: 7%\nUse context: kubectl config use-context cka\n\nNamespace `cka-netpol` has a `default-deny` NetworkPolicy that blocks all ingress and egress. The Pod `client` must reach `api-svc` (backing Pods labeled `app=api` on port `80`) and must still resolve cluster DNS, while the Pod `intruder` must remain unable to reach the API.\n\nPerform the following tasks:\n1. Create a NetworkPolicy named `allow-client-api` that allows `client` to reach the `api` Pods on port `80`.\n2. Allow DNS egress from `client` to the `kube-system` namespace on UDP and TCP port `53`.\n3. Keep `intruder` blocked from reaching the API.",
+  "copy_tokens": ["cka-netpol", "default-deny", "allow-client-api", "client", "api-svc", "app=api", "intruder", "53"],
   "docs_links": [
-    {
-      "label": "Network Policies",
-      "url": "https://kubernetes.io/docs/concepts/services-networking/network-policies/"
-    }
+    {"label": "Network Policies", "url": "https://kubernetes.io/docs/concepts/services-networking/network-policies/"}
   ],
+  "hints": [
+    "Inspect existing NetworkPolicies in `cka-netpol` (`k -n cka-netpol describe netpol`) and check both Ingress and Egress isolation.",
+    "Allow TCP port 80 between the required client/backend pods AND allow UDP/TCP port 53 egress so CoreDNS resolution succeeds."
+  ],
+  "fast_solution_commands": ["k -n cka-netpol get netpol,pods --show-labels"],
   "setup": {
-    "namespaces": ["payments"],
+    "namespaces": ["cka-netpol"],
     "manifests": [
-      "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\n  namespace: payments\n..."
+      "apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: default-deny\n  namespace: cka-netpol\nspec:\n  podSelector: {}\n  policyTypes:\n  - Ingress\n  - Egress\n",
+      "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\n  namespace: cka-netpol\n...",
+      "apiVersion: v1\nkind: Service\nmetadata:\n  name: api-svc\n  namespace: cka-netpol\n...",
+      "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: client\n  namespace: cka-netpol\n...",
+      "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: intruder\n  namespace: cka-netpol\n..."
     ],
+    "commands": [],
     "node_commands": []
   },
   "checks": [
     {
-      "id": "chk-netpol-exists",
-      "description": "NetworkPolicy `allow-api-to-db` existe no namespace `payments`",
-      "type": "kubectl_resource_exists",
-      "params": {
-        "kind": "NetworkPolicy",
-        "name": "allow-api-to-db",
-        "namespace": "payments"
-      },
-      "failure_hint": "A NetworkPolicy `allow-api-to-db` não foi encontrada no namespace `payments`."
-    },
-    {
-      "id": "chk-egress-dns",
-      "description": "Pods com label `app=api` conseguem resolver `postgres.payments.svc.cluster.local`",
+      "id": "chk-client-http",
+      "description": "`client` can reach `api-svc` with HTTP 200",
       "type": "pod_exec_exit_zero",
       "params": {
-        "namespace": "payments",
-        "label_selector": "app=api",
-        "command": ["nslookup", "postgres.payments.svc.cluster.local"]
+        "namespace": "cka-netpol",
+        "label_selector": "app=client",
+        "command": ["curl", "-sS", "--max-time", "5", "-o", "/dev/null", "-w", "%{http_code}", "http://api-svc.cka-netpol.svc.cluster.local"],
+        "stdout_contains": "200"
       },
-      "failure_hint": "O pod `api` não conseguiu resolver DNS interno. Verifique se a regra de Egress libera UDP/TCP porta 53 para o `kube-system`."
+      "failure_hint": "Allow ingress to app=api from app=client on port 80 and egress from client to the API.",
+      "weight_ratio": 1.0
+    },
+    {
+      "id": "chk-client-dns",
+      "description": "`client` can resolve `api-svc` through cluster DNS",
+      "type": "pod_exec_exit_zero",
+      "params": {
+        "namespace": "cka-netpol",
+        "label_selector": "app=client",
+        "command": ["sh", "-c", "nslookup api-svc.cka-netpol.svc.cluster.local | grep -q Address"]
+      },
+      "failure_hint": "Allow egress from client to kube-system on UDP/TCP 53.",
+      "weight_ratio": 1.0
+    },
+    {
+      "id": "chk-policy-exists",
+      "description": "NetworkPolicy `allow-client-api` exists",
+      "type": "kubectl_resource_exists",
+      "params": {"kind": "networkpolicy", "name": "allow-client-api", "namespace": "cka-netpol"},
+      "failure_hint": "Create the policy with exactly that name.",
+      "weight_ratio": 1.0
+    },
+    {
+      "id": "chk-intruder-denied",
+      "description": "`intruder` cannot reach the API",
+      "type": "pod_exec_must_fail",
+      "params": {
+        "namespace": "cka-netpol",
+        "label_selector": "app=intruder",
+        "command": ["curl", "-sS", "--max-time", "5", "http://api-svc.cka-netpol.svc.cluster.local"]
+      },
+      "failure_hint": "Do not allow app=intruder — the default deny must keep it blocked.",
+      "weight_ratio": 1.0
     }
   ],
   "solution": {
     "manifests": [
-      "apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: allow-api-to-db\n  namespace: payments\n..."
+      "apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: allow-client-api\n  namespace: cka-netpol\n...",
+      "apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: allow-client-dns\n  namespace: cka-netpol\n..."
     ],
-    "commands": []
-  },
-  "cleanup": {
-    "namespaces": ["payments"],
-    "kubectl_commands": [],
+    "commands": [],
     "node_commands": []
   },
-  "reference_solution": "1. Inspect the labels...\n```bash\nkubectl -n payments get pods --show-labels\n```"
+  "cleanup": {"namespaces": ["cka-netpol"], "commands": [], "node_commands": []},
+  "reference_solution": "Add the allow policies alongside the default deny:\n- `allow-client-api`: podSelector `app=api`, ingress from `app=client` on port 80\n- `allow-client-dns`: podSelector `app=client`, egress to `kube-system` on UDP/TCP 53 and to `app=api` on port 80",
+  "destructive": false
 }
 ```
 
@@ -86,7 +111,11 @@ A LLM deve retornar **exclusivamente um objeto JSON válido** seguindo exatament
 - **`solution` (bloco obrigatório):** manifests YAML e/ou comandos que resolvem o cenário de forma **automatizada** (aplicáveis via `kubectl apply`/`exec` sem humana no loop). É o insumo do **Solvability Probe** (Estágio E): a plataforma aplica o `solution` num clone de prova e exige que 100% dos checks fiquem `PASS` **antes** da questão entrar no banco — elimina questões insolúveis. A prosa didática continua em `reference_solution`.
 - **Imutabilidade pós-publicação:** publicado no banco (`bank_questions.state = published`), o envelope não muda mais (`envelope_hash`); correções geram nova versão (`supersedes_question_id`) e a antiga é aposentada.
 - **Dedup semântico:** fingerprint de `(domain, subtopics ordenados, título normalizado, hash dos manifests do setup)` — colisão com questão `published` descarta a nova (banco não enche de clones).
-- **`destructive` (flag booleana, default `false` — decisão D2):** obrigatória para todo cenário cuja resolução altera estado global do cluster (`etcdctl snapshot restore`, `kubeadm certs renew`/`upgrade`, restart do apiserver). O Gate D rejeita operações destrutivas não declaradas; cenários `destructive: true` só entram em sessões `mock_exam`, a UI exige confirmação ao iniciá-los e oferece **L2 (snapshot restore)** automaticamente antes de liberar o `Next` (o estado não volta ao limpo via L0/L1).
+- **`destructive` (flag booleana, default `false` — decisão D2):** obrigatória para todo cenário cuja resolução altera estado global do cluster (`etcdctl snapshot restore`, `kubeadm certs renew`/`upgrade`, restart do apiserver). O Gate D rejeita operações destrutivas não declaradas; cenários `destructive: true` ficam fora da prática por padrão (entram em `mock_exam`, ou com opt-in explícito via `allow_destructive`) e uma sessão que os contenha termina com **L2 (clean reset)**, porque o estado não volta ao limpo via L0/L1.
+- **`hints` e `fast_solution_commands` (v1.2):** pelo menos 2 dicas progressivas sem spoiler (nível 1: onde inspecionar; nível 2: conceito ou spec relevante) e atalhos imperativos do exam shell — alimentam o Hint Drawer e o Speed Coach.
+- **`archetype_id`:** arquétipo do currículo (`app/curriculum.py`) a que a questão pertence — alimenta Skill Tree, repetição espaçada e o Slot Planner.
+- **`checks[].weight_ratio`:** peso relativo de cada check no crédito parcial da questão (simulados).
+- **`setup.commands`, `solution.node_commands` e `cleanup.commands`:** completam o contrato original, que só previa `manifests`, `setup.node_commands` e o legado `cleanup.kubectl_commands` (ainda aceito).
 
 ### 1.2 Formato Exato de Prova (`prompt` em inglês — anatomia killer.sh / PSI Bridge)
 
@@ -120,15 +149,18 @@ O usuário nunca é avaliado por uma LLM durante o clique em **Check** — a ver
 | `type` | O que verifica | Parâmetros (`params`) | Uso típico na CKA |
 | :--- | :--- | :--- | :--- |
 | `kubectl_resource_exists` | Existência de qualquer objeto da API K8s (`Deployment`, `NetworkPolicy`, `HTTPRoute`, `PVC`, `Role`, etc.) | `kind`, `name`, `namespace` (opcional) | Confirmar criação e nome exato do recurso. |
-| `kubectl_jsonpath` | Compara valor extraído via JSONPath com esperado (`equals`, `contains`, `gte`, `regex`, `len_gte`) | `kind`, `name`, `namespace`, `jsonpath`, `operator`, `expected` | Verificar `replicas`, `image`, `storageClassName`, `tolerations`, `serviceAccountName`, `accessModes`, `type: NodePort`. |
+| `kubectl_jsonpath` | Compara valor extraído via JSONPath com o esperado (`equals`, `equals_int`, `contains`, `not_contains`, `gte`, `regex`, `len_gte`, `empty`, `not_empty`, `all_match`) | `kind`, `name` **ou** `label_selector`, `namespace`, `jsonpath`, `operator`, `expected` | Verificar `replicas`, `image`, `storageClassName`, `tolerations`, `serviceAccountName`, `accessModes`, `type: NodePort`. Em modo LIST (sem `name`, com `label_selector`) o jsonpath parte de `{.items[*].…}`. |
 | `pod_status_ready` | Confirma que pelo menos `min_ready` pods correspondentes ao seletor estão `Running` e `Ready=True` | `namespace`, `label_selector`, `min_ready` | Validar que pods saíram de `Pending`/`CrashLoopBackOff`. |
 | `node_status_ready` | Confirma que o nó especificado está com condição `Ready=True` | `node_name` (`controlplane`, `node01`, `node02`) | Cenários de Troubleshooting de `kubelet` ou nó em `NotReady`. |
 | `kubectl_auth_can_i` | Executa `kubectl auth can-i <verb> <resource> --as=system:serviceaccount:<ns>:<sa>` | `service_account`, `namespace`, `verb`, `resource`, `target_namespace`, `expected_allowed` (`true`/`false`) | Questões de RBAC (`Role`, `ClusterRole`, `RoleBinding`). |
 | `pod_exec_exit_zero` | Executa comando dentro de um pod vivo (ou pod efêmero `curlimages/curl` / `busybox`) e valida exit code `0` e opcionalmente `stdout_contains` | `namespace`, `label_selector` (ou `ephemeral_probe: true`), `command`, `stdout_contains` | Testar conectividade real entre pods, Service DNS, `NetworkPolicy` (permitir quem deve passar e **negar quem não deve**), `HTTPRoute`/`Ingress`. |
 | `pod_exec_must_fail` | Garante que um comando de conexão falha (timeout/exit != 0) | `namespace`, `label_selector`, `command` | Prova negativa obrigatória em `NetworkPolicy` (confirmar que `frontend` **não** acessa `postgres` diretamente). |
-| `node_command_exit_zero` | Executa comando read-only via SSH no nó especificado e verifica exit code `0` / `stdout_contains` | `node`, `command`, `stdout_contains` | Verificar `systemctl is-active kubelet`, arquivos estáticos, ou arquivo de backup `etcd` salvo em `/opt/backup/etcd.db`. |
+| `node_command_exit_zero` | Executa comando no nó especificado (SSH no Multipass, `docker exec` no kind) e verifica exit code `0` / `stdout_contains` | `node`, `command`, `stdout_contains` | Verificar `systemctl is-active kubelet`, arquivos estáticos, ou arquivo de backup `etcd` salvo em `/opt/backup/etcd.db`. |
 | `host_file_contains` | Verifica existência de arquivo salvo no host ou nó (ex.: saída de `kubectl get ... > /tmp/result.txt`) | `location` (`host` \| `controlplane` \| `node01` \| `node02`), `path`, `regex_patterns` | Questões clássicas da CKA que pedem para salvar nomes de nós/pods ordenados em um arquivo específico. |
 | `helm_release_state` | Verifica via `helm list -n <ns> -o json` o status `deployed`, chart e versão/revisão | `namespace`, `release_name`, `expected_status`, `min_revision` | Questões de Helm (install, upgrade, rollback). |
+| `service_endpoints_ready` | Pelo menos `min_ready_addresses` endpoints prontos atrás do Service (via `EndpointSlice`, com fallback para `Endpoints`) | `namespace`, `service_name`, `min_ready_addresses` | Validar Services sem depender de `jsonpath` sobre IPs. |
+| `deployment_rollout_ready` | Deployment com rollout concluído e `min_ready_replicas` prontas (opcionalmente com a imagem esperada) | `namespace`, `name`, `min_ready_replicas`, `expected_image` | Validar escalonamento, correção de imagem e rollouts. |
+| `pvc_bound` | PVC em fase `Bound`, opcionalmente com StorageClass e capacidade mínimas | `namespace`, `name`, `storage_class`, `min_storage` | Validar ligação de PVC e StorageClass dinâmica. |
 
 ---
 
@@ -142,7 +174,7 @@ LLMs ocasionalmente alucinam APIs obsoletas (ex.: `extensions/v1beta1`), nomes d
 
 1. **Schema & Syntax Gate:**
    - Todos os strings em `setup.manifests` e `solution.manifests` passam por `yaml.safe_load_all()`.
-   - Verificação de **imagens compatíveis com `arm64`** (o cluster roda em Apple Silicon M1 Pro!): imagens sugeridas no prompt incluem `nginx:1.27-alpine`, `busybox:1.36`, `redis:7-alpine`, `postgres:16-alpine`, `registry.k8s.io/pause:3.10`, `curlimages/curl:8.10.1`.
+   - Whitelist de imagens (`app/pipeline/gates.py`): só repositórios conhecidos e tags fixas; o laboratório pode ser `arm64` ou `amd64`, então use imagens multi-arch. Sugestões do prompt: `nginx:1.27-alpine`, `busybox:1.36`, `redis:7-alpine`, `postgres:16-alpine`, `alpine:3.20`, `httpd:2.4-alpine`, `curlimages/curl:8.10.1`, `registry.k8s.io/pause:3.10`.
 2. **Security Blocklist Gate:**
    - Rejeita comandos SSH sem `backup_paths` declarado quando tocarem diretórios de sistema.
    - **Declaração de destrutividade (D2):** operações como `etcdctl snapshot restore`, `kubeadm certs renew/upgrade` ou restart do `kube-apiserver` só passam com `destructive: true` declarado; sem a flag, o envelope é rejeitado com erro explícito.
@@ -158,21 +190,23 @@ LLMs ocasionalmente alucinam APIs obsoletas (ex.: `extensions/v1beta1`), nomes d
 
 ---
 
-## 4. Template do System Prompt da LLM
+## 4. Regras do System Prompt da LLM
+
+> O prompt autoritativo (em inglês) é `BUILDER_SYSTEM` em `app/pipeline/prompts.py`, montado com os placeholders `{{TOPOLOGY}}`, `{{DIFFICULTY}}`, `{{BAND}}`, `{{SLOT_BRIEF}}` e `{{FEW_SHOT}}`. O bloco abaixo é uma tradução de referência das regras — não é o texto enviado ao modelo.
 
 ```text
 Você é um Arquiteto Sênior de Exames da CNCF (criador de questões estilo Killer.sh e CKA oficial).
 Sua missão é gerar cenários práticos inéditos para execução em um cluster Kubernetes kubeadm REAL.
 
 TOPOLOGIA REAL DO CLUSTER DO CANDIDATO:
-- Versão Kubernetes: v1.37.2
-- Arquitetura dos Nós: Linux Ubuntu 22.04.5 LTS (ARM64 / Apple Silicon) — USE APENAS IMAGENS MULTI-ARCH / ARM64!
-- Runtime: containerd://2.2.1
-- CNI: Weave Net
+- Versão Kubernetes: <versão detectada em runtime>
+- Arquitetura dos Nós: <arquitetura> — USE APENAS IMAGENS MULTI-ARCH!
+- Runtime: containerd
+- CNI: <CNI do laboratório>
 - Nós disponíveis:
-  1. controlplane (role: control-plane, IP: 192.168.1.123)
-  2. node01 (role: worker, IP: 192.168.1.124)
-  3. node02 (role: worker, IP: 192.168.1.125)
+  1. controlplane (role: control-plane, IP: <ip-do-controlplane>)
+  2. node01 (role: worker, IP: <ip-do-node01>)
+  3. node02 (role: worker, IP: <ip-do-node02>)
 - Contexto kubectl: cka
 - Add-ons instalados dinamicamente: {{INSTALLED_ADDONS}}
 
@@ -187,8 +221,8 @@ REGRAS ESTRITAS DE CONSTRUÇÃO DO CENÁRIO:
 5. Os `checks` devem testar o ESTADO RESULTANTE no cluster ou nó, aceitando qualquer forma válida que o candidato use para resolver (imperativo ou declarativo). Nunca exija que o candidato use um comando específico se o estado da API for equivalente.
 6. Todo comando em `setup.node_commands` que modifique arquivos do nó DEVE listar os caminhos originais em `backup_paths` para restauração automática.
 7. Nunca use namespaces `kube-system`, `default`, `kube-public` para criar novos workloads de aplicação; use namespaces temáticos dedicados (ex: `cka-alpha`, `payments`, `ingress-lab`) para facilitar limpeza. (Exceção: troubleshooting de CoreDNS ou static pods do control plane).
-8. Retorne APENAS JSON válido aderente ao schema `ScenarioEnvelope v1`. Não inclua texto fora do JSON.
-9. Operações de `etcd` (`etcdctl snapshot save/restore`, `ETCDCTL_API=3`) devem rodar SEMPRE no nó `controlplane` via `node_commands` com `node: controlplane` — nunca no host do candidato nem em workers. Use o binário `etcdctl` e os certificados do nó (`/etc/kubernetes/pki/etcd/`); o `etcdctl` existente no Mac do candidato não participa dos checks.
+8. Retorne APENAS JSON válido aderente ao schema `ScenarioEnvelope v1.2`. Não inclua texto fora do JSON.
+9. Operações de `etcd` (`etcdctl snapshot save/restore`, `ETCDCTL_API=3`) devem rodar SEMPRE no nó `controlplane` via `node_commands` com `node: controlplane` — nunca no host do candidato nem em workers. Use o binário `etcdctl` e os certificados do nó (`/etc/kubernetes/pki/etcd/`); o `etcdctl` por ventura instalado no host do candidato não participa dos checks.
 10. O bloco `solution` deve resolver o cenário de forma AUTOMATIZADA (manifests YAML e/ou comandos `kubectl` aplicáveis sem intervenção humana) — ele alimenta o Solvability Probe, que aplica a solução num clone de prova e exige 100% dos checks `PASS`. Prosa didática vai apenas em `reference_solution`.
 ```
 

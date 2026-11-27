@@ -1,5 +1,7 @@
 # Plano de Análise Arquitetural e Melhorias Profundas — CKA Arena
 
+> **Registro histórico (auditoria de 21/11/2026) — congelado.** Diagnóstico forense e plano de melhorias, implementados na sequência (§7). Módulos citados como defeituosos (ex.: `app/composer.py`, `app/fault_units.py` e o `app/pipeline.py` monolítico) foram removidos ou reescritos; números de linhas, contagens e medidas refletem aquele momento. Estado atual: `README.md` e `ARCHITECTURE.md`.
+
 > **Data da auditoria:** 2026-11-21 · **Escopo:** Auditoria completa do código (`app/`, `static/`, `scenarios/seed/`, `tests/` — 8.630 linhas de código, 106 testes `pytest` verdes), configuração (`llm_config.json`) e evidências forenses do banco real (`data/cka_arena.db`: 135 questões, 40 jobs de geração, 618 chamadas LLM, 9 sessões, 36 check runs).
 > **Objetivo:** Transformar o **CKA Arena** numa plataforma local de treino CKA rápida, confiável e pedagogicamente fiel ao exame real (CNCF 2025/2026 / Killer.sh), atacando na raiz os 3 sintomas críticos relatados — **lentidão na geração**, **baixa qualidade/construção sem sentido das questões** e **alta taxa de quarentena** — além dos débitos estruturais do restante da arquitetura.
 

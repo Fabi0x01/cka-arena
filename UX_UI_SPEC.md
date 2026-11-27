@@ -2,15 +2,17 @@
 
 > **Modo de Superfície:** *Operate* (ferramenta de alta concentração operacional). A interface deve desaparecer para dentro da tarefa: zero decoração gratuita, zero animações lentas, escaneabilidade instantânea e conforto visual para sessões longas de estudo.
 
+> **Documento de referência** de UX. Onde divergir do que está implementado em `static/`, o código prevalece.
+
 ---
 
 ## 1. Princípio Central: Janela Única com Terminal Integrado (Dual-Window Opcional)
 
 O fluxo primário é **tudo dentro do navegador**, em uma única janela:
 - **Coluna Esquerda (~44%):** enunciado, contexto obrigatório, Copy-Pills, resultado do Check e a barra **Check → Next**.
-- **Coluna Direita (~56%):** **terminal real** (xterm.js sobre PTY do host) com abas criadas pelo popover **`+ Shell ▾`** (`mac · controlplane · node01 · node02`) — `kubectl`, `vim`, `helm` e `ssh` executam ali mesmo. O shell local nasce numa **workdir isolada** (`~/.cka-arena/scratch/<tab>`, exibida no rodapé): YAMLs e temporários nunca sujam a pasta do projeto, e o `kubectl` usa o kubeconfig dedicado (context `cka`).
-- **Check é único** — `check-btn` glass-clear no rodapé da coluna da questão — e disparável de qualquer foco via **`⌘↵`** (interceptado antes do xterm): o ciclo *editar → verificar → corrigir* acontece sem trocar de painel.
-- **Toggle `[⌗ Native]`** (rodapé do terminal): recolhe o painel embutido e devolve a ergonomia dual-window original (40% browser / 60% iTerm2/Ghostty) para quem prefere o terminal do SO; as Copy-Pills continuam copiando para o clipboard.
+- **Coluna Direita (~56%):** **terminal real** (xterm.js sobre PTY do host) com abas criadas pelo popover **`+ Shell`** (`Local shell · controlplane · node01 · node02`) — `kubectl`, `vim`, `helm` e `ssh` executam ali mesmo. O shell local nasce numa **workdir isolada** (`~/.cka-arena/scratch/<tab>`, exibida no rodapé): YAMLs e temporários nunca sujam a pasta do projeto, e o `kubectl` usa o kubeconfig dedicado (context `cka`).
+- **Check tem uma única ação** — botão no rodapé da coluna da questão, repetido na barra do terminal — e é disparável de qualquer foco via **`⌘↵`** (interceptado antes do xterm): o ciclo *editar → verificar → corrigir* acontece sem trocar de painel.
+- **Toggle `[⌗ Native]`** (rodapé do terminal): recolhe o painel embutido e devolve a ergonomia dual-window original (40% browser / 60% terminal nativo) para quem prefere o terminal do SO; as Copy-Pills continuam copiando para o clipboard.
 - **Idioma da UI: 100% inglês** (Revisão 3): labels, botões, toasts, previews, enunciados e hints — a prova CKA é em inglês e o treino inclui ler tarefas e feedback no idioma do exame. Strings de UI mostradas neste spec (wireframes, CTAs) já estão em inglês.
 
 **Regra de Responsividade Estrutural:**
@@ -89,9 +91,9 @@ O fluxo primário é **tudo dentro do navegador**, em uma única janela:
 | :--- | :--- | :--- |
 | `ready` | `● Ready 3/3` (verde) | Menu: Desligar · Reiniciar · Doctor |
 | `off` | `⏻ Off` (cinza) | **Power On** (CTA grande na home) |
-| `starting` | `⟳ Starting · passo N/7` (âmbar, animado) | Cancel boot |
+| `starting` | `⟳ Starting · step N/7` (âmbar, animado) | Cancel boot |
 | `degraded` | `▲ Degraded` (âmbar) | View diagnosis · Restore Baseline |
-| `daemon_down` | `⨯ Multipass` (coral) | Fix instructions (sudo launchctl) |
+| `daemon_down` | `⨯ Multipass` (coral) | Fix instructions (restart the node provider daemon) |
 
 ---
 
@@ -144,8 +146,8 @@ Acessível pela view **Studio** do segmented control (`⌘2`; também pelo CTA "
    - `Killer.sh Hardcore` *(Padrão recomendado)* — Mais difícil que a prova, 3–4 requisitos + armadilhas
    - `Boss Fight` — Caos multi-nó + workload dependente
 3. **Tamanho da Bateria & Foco Extra (Prompt Opcional):**
-   - Chips rápidos: `1 Cenário` | `3 Cenários` | `5 Cenários` | `Simulado Completo (15)`
-   - Campo opcional de 1 linha: *"Foco extra ou restrição (opcional)"* — ex.: *"Quero praticar static pods quebrados e não usar Helm nesta bateria"*.
+   - Chips rápidos: `1 Scenario` | `3 Scenarios` | `5 Scenarios` | `Full Mock Exam (15)`
+   - Campo opcional de 1 linha: *"Extra focus or constraint (optional)"* — ex.: *"I want to practice broken static pods and avoid Helm in this batch"*.
 4. **Progresso Transparente do Pipeline (SSE + live card):**
    - **Live job card** sempre visível durante e após a geração: chip de status (`running` pulsando / `done` / `failed`), `Qn/total · stage · elapsed` com o detalhe do passo atual, contadores (`published · quarantined · attempted`), barra de progresso e **uma linha por cenário** com mini-stages `A B C D E` (✓ concluído, ● atual, ✗ reprovado), tentativa (`try N`) e detalhe ao vivo.
    - **Event log** recolhível (últimos 40 eventos com timestamp) para auditoria do que o pipeline estava fazendo.
@@ -200,4 +202,5 @@ Identidade: **console de missão operacional sobre superfícies anodizadas escur
   - `⌘ + Shift + Enter` → Aciona **Next** quando desbloqueado
   - `⌘ + B` → Alterna **Zen Terminal** (terminal em largura total)
   - `⌘ + F` → Busca no histórico scrollback do terminal
-  - `⌘ + L` → Limpa o terminal ativo · `⌘ + 1..4` → Troca de visão · `⌘ + /` → Modal de atalhos · `Esc` → Fecha modal/busca
+  - `⌘ + L` → Limpa o terminal ativo · `⌘ + 1..5` → Troca de visão (Arena/Readiness/Studio/Settings/Study Codex) · `⌘ + /` → Modal de atalhos · `Esc` → Fecha modal/busca
+- Nos atalhos acima, `⌘` vale para o macOS; no Linux/WSL2 o modificador é `Ctrl` (e `Ctrl+Shift` quando o terminal está focado). A lista exibida na UI é a do modal de atalhos (`⌘/`).

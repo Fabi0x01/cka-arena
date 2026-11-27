@@ -9,7 +9,7 @@
 **CKA Arena** is built as a recessed anodized-obsidian mission console (`oklch` hue `252`). Rather than decorative translucent chrome across primary panels, hierarchy comes from calibrated luminance steps (`--canvas` → `--bay` → `--surface` → `--surface-raised`), crisp `1px` structural hairline seams, and restrained semantic telemetry colors.
 
 ### Core Rules
-1. **Single Window Shell:** Left `54px` Navigation Rail (`Arena ⌘1`, `Readiness ⌘2`, `Studio ⌘3`, `Settings ⌘4`, Command Palette `⌘K`, Cluster Power, Shortcuts `⌘/`) frames a `48px` Context Topbar and recessed dual-bay workspace.
+1. **Single Window Shell:** Left `54px` Navigation Rail (`Arena ⌘1`, `Readiness ⌘2`, `Studio ⌘3`, `Settings ⌘4`, `Study Codex ⌘5`, Command Palette `⌘K`, Cluster Power, Shortcuts `⌘/`) frames a `48px` Context Topbar and recessed dual-bay workspace.
 2. **Matte Content Surfaces:** Question Reader and `xterm.js` PTY Viewport always render over flat matte surfaces (`--bay` and `--terminal-bg` `#0A0D13`) with zero `backdrop-filter` blur behind scrolling text.
 3. **Top-Layer Glass Reserve:** Translucent blur (`backdrop-filter: blur(20px)`) is reserved strictly for interrupting top-layer `<dialog>` modals and Command Palette (`⌘K`).
 4. **Hairline Edge OR Compact Drop:** Primary controls rely on defined `1px` borders; overlays pair hairline edges with compact crisp elevation (`0 6px 10px`).
@@ -56,6 +56,7 @@ Tints (`--accent-tint`, `--pass-tint`, `--warn-tint`, `--fail-tint`, `--flag-tin
 
 ## 4. Native Overlays, Transitions & Keyboard Contract
 
-- **View Transitions:** Switching between `Arena`, `Readiness`, `Studio`, and `Settings` runs inside `document.startViewTransition()` on `view-transition-name: main-surface`.
+- **View Transitions:** Switching between `Arena`, `Readiness`, `Studio`, `Settings`, and `Study Codex` runs inside `document.startViewTransition()` on `view-transition-name: main-surface`.
 - **Command Palette (`⌘K`):** Top-layer `<dialog>` providing single-keystroke access to view jumps, instant practice presets, Check/Next, SSH node tabs (`controlplane`, `node01`, `node02`), Zen Mode (`⌘B`), and scrollback Find (`⌘F`). (`⌘L` clears the active terminal.)
 - **Anchored Popovers (`popover="auto"`):** Cluster Power menu (`#power-menu`) and Terminal `+ Shell` menu (`#new-tab-menu`) use native top-layer placement with `@supports (position-area: block-end)` anchor positioning and fixed-inset fallbacks.
+- **Modifier Key:** `⌘` on macOS; `Ctrl` on Linux/WSL2 (`Ctrl+Shift` while the terminal is focused) — resolved in `static/js/app.js`.

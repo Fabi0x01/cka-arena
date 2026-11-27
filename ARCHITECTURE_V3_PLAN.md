@@ -1,5 +1,7 @@
 # CKA Arena v3 — Architectural Upgrade Report
 
+> **Historical record (2026-11-22) — frozen.** v3 upgrade report. Later work (v4 mastery and review, frontend redesign) is not covered here, and some file names have changed since. Current state: `README.md` and `ARCHITECTURE.md`.
+
 **Date:** 2026-11-22  
 **Status:** Implemented & Verified (Unit/API Tests, JS Validation, Live Cluster Seed Validation, Live DeepSeek Pipeline Benchmark)
 

@@ -1,5 +1,7 @@
 # SETUP_PLAN — `setup.sh` universal + publicação OSS do CKA Arena
 
+> **Registro histórico (novembro de 2026) — congelado**, mas ainda a referência do design da abstração de provider (§2.1, citada em `app/provider/base.py`). O que o documento chama de "plano" já está implementado (§10). Divergências conhecidas em relação ao `setup.sh` atual: existe também a flag `--restart`; `--step` aceita `deps|cluster|wire|addons|seeds|server` (não os nove steps numerados do §4); e os nomes de arquivo citados em §2 (`cluster/addons.sh`, `.env.example`) não existem — os addons vivem em `app/addons.py`. Uso real: `./setup.sh --help`.
+
 > Plano de adaptação para que qualquer pessoa clone o repositório no GitHub e rode
 > `./setup.sh` para ter a plataforma funcionando localmente. Requisitos do dono (verbais, 18/11/2026):
 > (1) o script sobe tudo — cluster, banco, addons; (2) detecta distro/S.O.; (3) detecta pré-requisitos

@@ -1,5 +1,7 @@
 # Prontidão para Implementação — Veredito da Auditoria Final
 
+> **Registro histórico (17/11/2026) — congelado.** Gate de autorização anterior à implementação; todas as fases foram implementadas depois. Mantido como registro das decisões D1–D4 e dos riscos aceitos. Estado atual: `README.md` e `ARCHITECTURE.md`.
+
 > Auditoria de coerência ponta a ponta da documentação (10 arquivos, 3 revisões) antes da autorização de implementação. Data: 2026-11-17.
 
 ---

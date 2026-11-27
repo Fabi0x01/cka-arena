@@ -4,6 +4,8 @@
 >
 > Complementa `LLM_SCENARIO_SPEC.md` (contrato `ScenarioEnvelope` e catálogo de checks — permanece válido) e `ARCHITECTURE.md` (componentes e banco).
 
+> **Documento de referência.** Os conceitos (contratos, gates, níveis de teardown) descrevem o design; as notas marcadas `(v2)`/`(v3)`/`(v4.x)` e as medições "ao vivo" são incrementos históricos, com números do laboratório de referência. Onde divergir, o código prevalece: `app/pipeline/`, `app/bank.py`, `app/sessions.py` e `app/teardown.py`.
+
 ---
 
 ## 1. Decisão Executiva: Pipeline Determinístico com "Agentes-Estágio" (sem LangGraph/LangChain)
@@ -33,12 +35,12 @@ O fluxo de 3 agentes proposto — **Normalizador** (padroniza o pedido num contr
 
 ---
 
-## 2. O Pipeline de Geração (`pipeline.py`) — 5 Estágios
+## 2. O Pipeline de Geração (`app/pipeline/`) — 5 Estágios
 
 ```mermaid
 flowchart TD
     U["Usuário (Scenario Studio)\ndomínios[] + dificuldade + qtd + foco"] -->|POST /api/generate| A
-    subgraph PIPE["pipeline.py — job assíncrono, progresso via SSE"]
+    subgraph PIPE["app/pipeline/ — job assíncrono, progresso via SSE"]
         A["Estágio A · AGENTE NORMALIZADOR (flash)\n→ GenerationRequest JSON canônico"] --> B["Estágio B · AGENTE CONSTRUTOR (principal)\n→ ScenarioEnvelope (1 por chamada, N paralelas)"]
         B --> C["Estágio C · AGENTE REVISOR (flash)\nrubric: ambiguidade, justiça, escopo dos checks, exam voice EN, difficulty-tier fit, copy_tokens"]
         C -->|verdict: precisa patch| B
@@ -48,7 +50,7 @@ flowchart TD
         E -->|falhou| B
     end
     E -->|ok| BANK[("bank_questions\nstate: published")]
-    B -->|2 retries esgotados| QUAR["bank_questions\nstate: draft + erro\n(quizá revisão manual)"]
+    B -->|orçamento de correções esgotado| QUAR["bank_questions\nstate: draft + erro\n(sujeita a reparo manual)"]
 ```
 
 ### Estágio A — Agente Normalizador (modelo flash)
@@ -118,38 +120,24 @@ Roda **no cluster real, em namespace efêmero de prova** (`cka-arena-prove-<uuid
 | **Evidência na correção (v2)** | falha de probe devolve **expected/got/exit/stderr por check** (`_failure_detail`), não só os ids | a LLM corrige de primeira — alvo direto da taxa de quarentena (60% histórica: "solução não resolve os checks") |
 
 - **Provider por config:** `llm_config.json` do projeto (editável em **Settings → AI provider**) → env `CKA_LLM_*`; GLM primário quando a chave existir; DeepSeek como fallback/principal conforme disponibilidade.
-- **Modelos são escolhidos por dropdown** (catálogo por provider, sem digitação): GLM Coding Plan `glm-5.3`/`glm-5.3-flash` no endpoint OpenAI-compatible `https://api.z.ai/api/coding/paas/v4` (reasoning sempre ativo; `reasoning_effort` low no fast path, max no deep); DeepSeek `deepseek-v4-pro`/`deepseek-flash`; Claude Fable/Opus/Sonnet/Haiku 5.5/5.2; GPT-6.2 Sol/Astra, GPT-6.1 Terra, GPT-6 Luna; OpenCode Zen (DeepSeek/GLM/Claude/GPT).
+- **Modelos são escolhidos por dropdown** (catálogo por provider em `app/llm_client.py`, sem digitação — a lista abaixo é um retrato e pode defasar): GLM Coding Plan `glm-5.3`/`glm-5.3-flash` no endpoint OpenAI-compatible `https://api.z.ai/api/coding/paas/v4` (reasoning sempre ativo; `reasoning_effort` low no fast path, max no deep); DeepSeek `deepseek-v4-pro`/`deepseek-flash`; Claude Fable/Opus/Sonnet/Haiku; GPT-6.2 Sol/Astra, GPT-6.1 Terra, GPT-6 Luna; OpenCode Zen (DeepSeek/GLM/Claude/GPT); Ollama local (endpoint OpenAI-compatible em `http://127.0.0.1:11434/v1`).
 
 ### Concorrência
-- Um job de geração por vez (o cluster é um recurso só); N cenários do job provados **sequencialmente** (share do cluster de prova) com paralelismo apenas nas chamadas LLM.
+- Um job de geração por vez (o cluster é um recurso só); até 3 Construtores em paralelo (`asyncio.Semaphore(3)`); cenários puramente *namespace-scoped* são provados em namespaces efêmeros, com até 2 probes simultâneos (`Semaphore(2)`); cenários com `node_commands`, recursos cluster-scoped ou `destructive` ficam no lock exclusivo do probe.
 
 ---
 
-### 2.1 Geração por composição (v5) — tiers duras sem quarentena por construção
+### 2.1 Geração guiada por arquétipos e incidentes causais (CKA Arena v3+)
 
-A partir da v5, **killer_hardcore e boss_fight são geradas por composição de
-fault-units pré-validadas** (`app/fault_units.py` + `app/composer.py`), não por autoria
-livre da LLM:
+A partir do upgrade arquitetural v3, o Construtor não parte de um prompt genérico: cada slot do job nasce planejado.
 
-- **Fault-unit** = bloco (setup que quebra · checks que falham · solution que resolve)
-  extraído 1:1 dos seeds **PROBE OK** (16 unidades; SN/TS/WL/ST/CA, incluindo unidades
-  de nó: kubelet e etcd-snapshot). Cada unidade carrega sintoma/tarefa/tokens.
-- **Composer** seleciona unidades (boss 5 c/ ≥1 de nó · killer 3 c/ limite de checks da
-  banda), gera namespaces únicos parametrizados, monta o envelope completo com
-  weight/minutes derivados da contagem (clamp na banda) e texto determinístico.
-- **A LLM só escreve a narrativa** (título/prompt em inglês de exame, 1 chamada flash
-  ~1.4k tokens); validamos identificadores/contagem de tasks e há **fallback
-  determinístico** — a geração funciona até sem chave de LLM.
-- **Anti-quarentena por construção**: probe falho por conteúdo → **a unidade culpada
-  (prefixo do check id) é trocada** e o cenário remontado (≤2 swaps), sem regeneração
-  por LLM; infra → retry sem consumir orçamento; fallback ao caminho autoral só se a
-  biblioteca inteira esgotar.
-- **Integridade garantida por teste**: todo manifesto é YAML válido com kind; todo
-  payload `-p` de patch é JSON válido (pegou um `}` faltante real na biblioteca).
-- **Dedup de variedade**: combos recentes (40 últimos publicados, via
-  `generator_meta_json.units`) são evitados na amostragem.
-- Medição (19/11/2026, build final): **boss×3 + killer×2 → 5/5 publicados, 0
-  quarentena, ~60–65s por questão** (antes: boss com até 40min e quarentena).
+- **Currículo (`app/curriculum.py`):** catálogo de arquétipos do CKA — domínio, sub-tópicos, kinds e tipos de check exigidos, armadilhas do tópico, addons necessários — mais **blueprints de incidentes causais** para `boss_fight` (várias falhas no mesmo sistema, com cadeia de causa e efeito).
+- **Slot Planner (`app/planner.py`):** distribui os N slots do pedido priorizando as células vazias da grade domínio×dificuldade, evita arquétipos e títulos recentes e atribui um namespace de negócio neutro por slot.
+- **Construtor com slot brief:** o prompt recebe o brief do arquétipo, a banda de dificuldade e um exemplar few-shot do mesmo domínio/nível; o gate `archetype_alignment_errors()` rejeita envelopes que não cumprem `required_kinds`, `required_check_types` e `required_keywords`.
+- **Revisor e feedback:** o Revisor julga o envelope contra o brief; o feedback do usuário sobre uma questão (`question_feedback`) realimenta o planner.
+- **Geração direcionada:** `POST /api/generate/fill-gaps`, `POST /api/generate/fill-archetypes` e `POST /api/generate/archetype/{archetype_id}`.
+
+> Histórico: antes disso, as tiers duras eram geradas por composição de *fault-units* pré-validadas (`app/composer.py` + `app/fault_units.py`, iteração v5 do pipeline). Esses módulos foram removidos; o registro está em `IMPROVEMENT_PLAN.md` e `ARCHITECTURE_V3_PLAN.md`.
 
 ## 3. Banco de Questões (`bank_questions`)
 
@@ -208,7 +196,7 @@ No design anterior, `scenarios` pertencia a `sessions` (a fila gerada era a sess
 | `SKIP` | Pré-condição não satisfeita (ex.: recurso pai ausente) com `reason` | contra (exibido como "não avaliável — resolva o item anterior") | re-avaliado no próximo Check |
 | `ERROR` | Falha de infra (apiserver unreachable, SSH down, timeout de execução) | **não** — a rodada é inválida | 2× com backoff 1s; persistindo → rodada inteira marcada `infra_error` |
 
-- **Timeout por check:** 10s default (`pod_exec_*`: 20s); `node_command_*`: 15s. Timeout vira `ERROR`, nunca `FAIL`.
+- **Timeout por check:** 10s default (`pod_exec_*`: 45s; `helm_release_state`: 20s); `node_command_*`: 15s. Timeout vira `ERROR`, nunca `FAIL`.
 - **Provas negativas** (`pod_exec_must_fail`): obrigatoriamente embutem o próprio limite no comando (ex.: `curl --max-time 5`, `nc -w 3`, `timeout 5 wget …`) — a spec do Construtor rejeita `must_fail` sem timeout embutido (gate D).
 - **Read-only:** checks não mutam workloads do usuário; sondas efêmeras (`ephemeral_probe`) rodam com label `cka-arena.io/probe: "true"` e TTL de limpeza de 120s.
 
@@ -248,15 +236,16 @@ No design anterior, `scenarios` pertencia a `sessions` (a fila gerada era a sess
 ### 6.3 Tela de Fim de Sessão (UX)
 
 ```
-┌──────────────────────────────────────────────────┐
-│  SESSÃO FINALIZADA · 11/15 · 68% acerto 1ª tent. │
-│  Tempo total 78 min · pior domínio: Storage      │
-│ ──────────────────────────────────────────────── │
-│  Limpar cluster agora?                           │
-│  [✓ Limpeza Rápida (L1 · ~30s)]  ← default       │
-│  [⟳ Reset Total p/ Baseline (L2 · 3–6 min)]      │
-│  (drift detectado: recomendamos L2)              │
-└──────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│  SESSION COMPLETE · 11/15 · 68% first-try passes     │
+│  Total time 78 min · weakest: Storage (2/5)          │
+│ ──────────────────────────────────────────────────── │
+│  Clean up the cluster now?                           │
+│  [✓ Fast Cleanup (L1 · ~30s)]     ← default          │
+│  [⟳ Clean Reset (L2 · ~2 min)]                        │
+│   (drift detected → L2 recommended; mock exams       │
+│    always run L2 automatically)                      │
+└──────────────────────────────────────────────────────┘
 ```
 
 - Se o drift check do L1 detectar divergência vs baseline (arquivo de nó alterado, namespace órfão), a UI **recomenda L2** explicitamente.

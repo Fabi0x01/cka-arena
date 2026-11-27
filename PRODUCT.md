@@ -4,15 +4,16 @@
 
 ## O que é
 
-Plataforma local de treino prático para a prova **Certified Kubernetes Administrator (CKA)**, no estilo KodeKloud/Killer.sh, rodando contra um cluster `kubeadm` real (3 VMs Multipass em Apple Silicon, v1.37.2). Três mecanismos se combinam:
+Plataforma local de treino prático para a prova **Certified Kubernetes Administrator (CKA)**, no estilo dos simuladores de prova, rodando contra um laboratório `kubeadm` real (três nós: VMs Multipass no macOS/Linux ou containers kind no WSL2/Linux com Docker). Quatro mecanismos se combinam:
 
 1. **Terminal real no browser** (PTY do host em xterm.js) ao lado da questão — resolver e pedir validação sem sair da janela.
-2. **Cluster gerenciado pela plataforma** — botão liga/desliga as VMs, boot instrumentado, clean reset (L2) ao fim da sessão, preservando os addons.
-3. **Gerador de cenários com IA** — pipeline multi-estágio (Normalizador → Construtor → Revisor → gates → prove-out de solubilidade) que publica questões num banco; a prática sorteia pelas percentuais oficiais da prova.
+2. **Laboratório gerenciado pela plataforma** — botão liga/desliga, boot instrumentado e clean reset (L2) ao fim da sessão, preservando os addons.
+3. **Gerador de cenários com IA** — pipeline multi-estágio (planejamento por arquétipo → Construtor → gates determinísticos → Revisor → prove-out de solubilidade) que publica questões num banco; a prática sorteia pelos pesos oficiais da prova.
+4. **Pedagogia orientada por dados** — repetição espaçada por arquétipo, relatório de prontidão Go/No-Go, drills direcionados e Study Codex.
 
 ## Para quem
 
-Um único usuário: o próprio dono da máquina — engenheiro experiente, estudando para a CKA em sessões de alta concentração (30–120 min), com o navegador em tela cheia ou quase no MacBook Pro 16". Não existe segundo usuário, não existe mobile real, não existe demo pública.
+Um único usuário: quem está na frente da máquina — engenheiro experiente, estudando para a CKA em sessões de alta concentração (30–120 min), com o navegador em tela cheia ou quase. Não existe segundo usuário, não existe mobile real, não existe demo pública.
 
 ## O que a superfície precisa provar
 
@@ -26,7 +27,7 @@ Um único usuário: o próprio dono da máquina — engenheiro experiente, estud
 
 ## Compromissos de marca
 
-- Identidade visual **Liquid Glass** (pinned pelo dono): materiais de vidro translúcido em camadas, sobre um fundo escuro profundo; moderno, fluido, bonito — onde possível.
+- Identidade visual **Orbital Control Console**: console de missão sobre superfícies anodizadas escuras, hierarquia por degraus de luminância e vidro translúcido reservado às camadas superiores (contrato completo em [`DESIGN.md`](./DESIGN.md)).
 - Um único padrão de frontend: **todas as visões compartilham o mesmo shell** — nenhuma "página" diferente da outra.
-- Acessibilidade **explicitamente fora de escopo** nesta fase (decisão do dono; `prefers-reduced-motion` continua respeitado por custo zero).
+- Acessibilidade **explicitamente fora de escopo** nesta fase (decisão do mantenedor; `prefers-reduced-motion` continua respeitado por custo zero).
 - **Idioma do sistema: 100% inglês** (UI, enunciados, hints, soluções, toasts) — a prova CKA é em inglês; a leitura de tarefas no idioma do exame faz parte do treino. Documentação interna do projeto permanece em PT-BR.
